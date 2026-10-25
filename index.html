@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Price Manager | Mallonomo Enterprise</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="theme-color" content="#0E3B26">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://dfqobqqtohwtibnncbfu.supabase.co; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#EEF1EF; --surface:#FFFFFF; --ink:#14211B; --muted:#55645C; --line:#CBD3CE;
+  --brand:#0E3B26; --accent:#0E5A38; --accent-hover:#0A4A2E; --on-accent:#FFFFFF;
+  --danger:#A8211B; --danger-bg:#FBEAE8; --warn-bg:#FFF4D6; --warn-ink:#5E4200; --ok:#0E5A38;
+  --focus:#0B63CE;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;min-height:100vh}
+body.lock{overflow:hidden}
+h1,h2,h3,p{margin:0}
+button,input,select{font:inherit;color:inherit}
+[hidden]{display:none!important}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 18px;border:1.5px solid var(--ink);border-radius:6px;background:var(--surface);color:var(--ink);font-weight:600;cursor:pointer;text-align:center;line-height:1.2}
+.btn:hover{background:#F4F6F5}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.btn-danger:hover{background:#8E1B16}
+.btn-quiet{border-color:var(--line)}
+.btn-block{width:100%}
+.link{background:none;border:0;padding:10px 0;min-height:44px;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer}
+.link:disabled{opacity:.45;cursor:not-allowed}
+
+/* Forms */
+.field{display:block;margin-bottom:16px}
+.field>label,.label{display:block;font-weight:600;margin-bottom:6px}
+.input,select.input{width:100%;min-height:48px;padding:10px 12px;border:1.5px solid #8A978F;border-radius:6px;background:#fff;font-size:1rem}
+.input:focus{border-color:var(--focus)}
+.hint{color:var(--muted);font-size:.875rem;margin-top:6px}
+.err{color:var(--danger);font-size:.9375rem;margin-top:6px;font-weight:600}
+.err:empty{display:none}
+.form-err{background:var(--danger-bg);border:1.5px solid var(--danger);color:#6E120E;border-radius:6px;padding:12px;margin-bottom:16px;font-weight:600}
+.form-err:empty{display:none}
+.form-ok{background:#E3F2E9;border:1.5px solid var(--ok);color:#0A3D25;border-radius:6px;padding:12px;margin-bottom:16px;font-weight:600}
+.check{display:flex;align-items:center;gap:10px;min-height:44px;margin:-6px 0 12px;cursor:pointer}
+.check input{width:22px;height:22px;accent-color:var(--accent)}
+
+/* Auth screens */
+.auth{max-width:440px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 20px 40px}
+.auth-brand{background:var(--brand);color:#fff;margin:0 -20px 28px;padding:22px 20px}
+.auth-brand .b1{font-size:.9375rem;opacity:.9}
+.auth-brand .b2{font-size:1.5rem;font-weight:700;letter-spacing:-.01em}
+.auth h1{font-size:1.5rem;letter-spacing:-.01em;margin-bottom:6px}
+.auth .lead{color:var(--muted);margin-bottom:20px}
+.auth .foot{margin-top:20px;color:var(--muted);font-size:.9375rem}
+.auth .links{display:flex;flex-direction:column;align-items:flex-start;margin-top:10px}
+.center-msg{max-width:440px;margin:0 auto;padding:60px 20px;text-align:center;color:var(--muted)}
+
+/* App shell */
+.top{background:var(--brand);color:#fff;padding-top:env(safe-area-inset-top)}
+.top-in{max-width:760px;margin:0 auto;padding:12px 16px 4px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{font-size:.8125rem;opacity:.85}
+.title{font-size:1.25rem;font-weight:700;letter-spacing:-.01em}
+.who{max-width:760px;margin:0 auto;padding:0 16px 12px;font-size:.875rem;opacity:.9}
+.top .btn{background:transparent;border-color:rgba(255,255,255,.6);color:#fff;min-height:44px}
+.top .btn:hover{background:rgba(255,255,255,.12)}
+.top :focus-visible{outline-color:#fff}
+.wrap{max-width:760px;margin:0 auto;padding:16px 16px 80px}
+.sec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.sec-head h2{font-size:1.375rem;letter-spacing:-.01em}
+.search{position:relative;margin-bottom:10px}
+.search .input{padding-right:48px}
+.search .clear{position:absolute;right:2px;top:2px;width:44px;height:44px;border:0;background:none;font-size:1.5rem;line-height:1;color:var(--muted);cursor:pointer}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+@media (max-width:440px){.filters{grid-template-columns:1fr}}
+.input::placeholder{color:#5F6D65;font-size:.9375rem}
+.meta{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:.9375rem;margin-bottom:6px}
+.banner{border-radius:6px;padding:12px;margin-bottom:12px;font-weight:600}
+.banner.info{background:var(--warn-bg);color:var(--warn-ink);border:1.5px solid #D9B24C}
+.banner.bad{background:var(--danger-bg);color:#6E120E;border:1.5px solid var(--danger)}
+.banner .link{color:inherit;padding:6px 0 0;min-height:44px;display:block}
+
+/* Product rows */
+.list{list-style:none;margin:0;padding:0;background:var(--surface);border:1.5px solid var(--line);border-radius:8px}
+.item{padding:14px 14px 12px;border-top:1.5px solid var(--line)}
+.item:first-child{border-top:0}
+.item-top{display:flex;justify-content:space-between;gap:14px}
+.item-info{min-width:0}
+.name{font-size:1.0625rem;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
+.unit{font-weight:600;margin-top:2px}
+.cat{color:var(--muted);font-size:.875rem;overflow-wrap:anywhere}
+.item-price{text-align:right;flex:none;padding-left:12px;border-left:1.5px solid var(--line)}
+.price{font-size:1.5rem;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.15}
+.stock{font-weight:700;font-size:.875rem;margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.stock::before{content:"";width:9px;height:9px;background:currentColor;display:inline-block}
+.stock.in{color:var(--ok)}
+.stock.outs{color:var(--danger)}
+.item.out .price{color:var(--muted)}
+.stamp{color:var(--muted);font-size:.8125rem;margin-top:8px}
+.item-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+.more{margin-top:14px}
+
+/* Sheet */
+.overlay{position:fixed;inset:0;background:rgba(10,20,15,.55);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+.sheet{background:var(--surface);width:100%;max-width:520px;max-height:92vh;max-height:92dvh;overflow:auto;border-radius:12px 12px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom));animation:up .18s ease-out}
+.sheet:focus{outline:none}
+.sheet-head h2{font-size:1.25rem;letter-spacing:-.01em;margin-bottom:12px}
+.sheet-name{font-weight:700;font-size:1.0625rem;overflow-wrap:anywhere}
+.big-price{font-size:2rem;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin:2px 0 16px}
+.sheet .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
+.sheet .actions.one{grid-template-columns:1fr}
+.sheet p+p{margin-top:10px}
+.discard{margin-top:16px;padding-top:14px;border-top:1.5px solid var(--line)}
+.warnline{background:var(--warn-bg);color:var(--warn-ink);border:1.5px solid #D9B24C;border-radius:6px;padding:10px 12px;font-weight:600}
+@keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+@media (min-width:600px){.overlay{align-items:center}.sheet{border-radius:12px}}
+@media (prefers-reduced-motion:reduce){.sheet{animation:none}}
+
+/* Toast */
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:#fff;padding:13px 18px;border-radius:6px;font-weight:600;z-index:80;max-width:calc(100% - 32px);text-align:center}
+.toast.bad{background:var(--danger)}
+</style>
+</head>
+<body>
+<div id="app"><p class="center-msg">Loading...</p></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<noscript><p class="center-msg">Price Manager needs JavaScript. Turn it on in your browser and reload this page.</p></noscript>
+
+<script src="supabase.js"></script>
+<script>
+(function () {
+'use strict';
+
+/* ------------------------------------------------------------------
+   Settings
+------------------------------------------------------------------- */
+var CFG = {
+  url: 'https://dfqobqqtohwtibnncbfu.supabase.co',
+  key: 'sb_publishable_kEFKJKh3H8eAM_YWMJ2WiA_Me16P_Rd'
+};
+var UNITS = ['Piece','Pack','Roll','Sachet','Tin','Bottle','Jar','Bag','Carton','Litre','Kilogram'];
+var PAGE = 100;
+var MAX_PRICE = 99999999;
+var CACHE_KEY = 'mpm_cache_v1';
+var PCOLS = 'id,name,barcode,category_id,unit,price,in_stock,updated_at,updated_by';
+
+var initialHash = window.location.hash || '';
+
+if (!window.supabase || !window.supabase.createClient) {
+  document.getElementById('app').innerHTML = '<p class="center-msg">The app could not start. Reload this page. If it keeps happening, contact the owner.</p>';
+  return;
+}
+var sb = window.supabase.createClient(CFG.url, CFG.key, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+});
+
+/* ------------------------------------------------------------------
+   State
+------------------------------------------------------------------- */
+var state = {
+  session: null, userId: null, profile: null, recovery: false,
+  products: [], categories: [], catMap: {}, names: {},
+  q: '', cat: '', stock: '', limit: PAGE,
+  fresh: false, loadedAt: null, loadedOnce: false, loadError: '', loadToken: 0, loading: false,
+  routeToken: 0, notice: ''
+};
+var sheet = null;
+var toastTimer = null;
+var booted = false;
+
+/* ------------------------------------------------------------------
+   Helpers
+------------------------------------------------------------------- */
+function $(s, root) { return (root || document).querySelector(s); }
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function money(n) {
+  return '\u20A6' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function fmtTime(ms) {
+  var d = new Date(ms);
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function byId(id) {
+  for (var i = 0; i < state.products.length; i++) if (state.products[i].id === id) return state.products[i];
+  return null;
+}
+function sortProducts() {
+  state.products.sort(function (a, b) { return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
+}
+function rebuildCatMap() {
+  state.catMap = {};
+  state.categories.forEach(function (c) { state.catMap[c.id] = c.name; });
+}
+function isNetwork(err) {
+  if (!err) return false;
+  var m = String(err.message || '').toLowerCase();
+  return err.name === 'AuthRetryableFetchError' || err.name === 'TypeError' ||
+    /failed to fetch|networkerror|network request failed|load failed|fetch failed/.test(m);
+}
+function isExpired(err) {
+  if (!err) return false;
+  var m = String(err.message || '').toLowerCase();
+  return err.status === 401 || err.code === 'PGRST301' || err.code === 'PGRST303' || /jwt|not authenticated|session/.test(m) && /expire|invalid|missing/.test(m);
+}
+function withTimeout(promise, ms) {
+  return new Promise(function (resolve, reject) {
+    var t = setTimeout(function () { reject({ timeout: true }); }, ms);
+    promise.then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+  });
+}
+/* Runs a query with a time limit. build(signal) must return the query. */
+function timed(build, ms) {
+  var ctrl = new AbortController();
+  var hit = false;
+  var t = setTimeout(function () { hit = true; ctrl.abort(); }, ms || 15000);
+  return Promise.resolve(build(ctrl.signal)).then(function (r) {
+    clearTimeout(t);
+    if (hit) return { data: null, error: { timeout: true, message: 'timeout' } };
+    return r;
+  }, function (e) {
+    clearTimeout(t);
+    return { data: null, error: hit ? { timeout: true, message: 'timeout' } : e };
+  });
+}
+function toast(msg, bad) {
+  var t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (bad ? ' bad' : '');
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3500);
+}
+function saveCache() {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      userId: state.userId, at: state.loadedAt,
+      products: state.products, categories: state.categories, names: state.names
+    }));
+  } catch (e) { /* storage may be unavailable */ }
+}
+function loadCache() {
+  try {
+    var raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return false;
+    var c = JSON.parse(raw);
+    if (!c || c.userId !== state.userId || !Array.isArray(c.products)) return false;
+    state.products = c.products; state.categories = c.categories || []; state.names = c.names || {};
+    state.loadedAt = c.at || null; rebuildCatMap(); sortProducts();
+    return true;
+  } catch (e) { return false; }
+}
+function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* ignore */ } }
+function resetData() {
+  state.products = []; state.categories = []; state.catMap = {}; state.names = {};
+  state.q = ''; state.cat = ''; state.stock = ''; state.limit = PAGE;
+  state.fresh = false; state.loadedAt = null; state.loadedOnce = false; state.loadError = ''; state.profile = null;
+}
+
+/* ------------------------------------------------------------------
+   Sheet (dialog)
+------------------------------------------------------------------- */
+function closeSheet(returnFocus) {
+  if (!sheet) return;
+  var s = sheet; sheet = null;
+  document.removeEventListener('keydown', s.onKey, true);
+  if (s.root.parentNode) s.root.parentNode.removeChild(s.root);
+  document.body.classList.remove('lock');
+  if (returnFocus !== false && s.opener && s.opener.focus && document.body.contains(s.opener)) s.opener.focus();
+}
+function openSheet(opts) {
+  closeSheet(false);
+  var opener = document.activeElement;
+  var root = document.createElement('div');
+  root.className = 'overlay';
+  root.innerHTML = '<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">' +
+    '<div class="sheet-head"><h2 id="sheet-title"></h2></div><div class="sheet-body"></div><div class="discard" hidden></div></div>';
+  var panel = $('.sheet', root);
+  var body = $('.sheet-body', root);
+  var disc = $('.discard', root);
+  $('#sheet-title', root).textContent = opts.title || '';
+  var api = {
+    root: root, opener: opener, busy: false, dirty: null, discardMsg: opts.discardMsg || 'Discard your changes?',
+    body: body,
+    setTitle: function (t) { $('#sheet-title', root).textContent = t; },
+    set: function (html, focusSel) {
+      disc.hidden = true; disc.innerHTML = '';
+      body.innerHTML = html;
+      var f = focusSel ? $(focusSel, body) : null;
+      if (f) f.focus(); else panel.focus();
+    },
+    close: function () { closeSheet(); },
+    requestClose: function () {
+      if (api.busy) return;
+      if (api.dirty && api.dirty()) {
+        disc.hidden = false;
+        disc.innerHTML = '<p><strong>' + esc(api.discardMsg) + '</strong></p><div class="actions">' +
+          '<button type="button" class="btn" data-keep>Keep editing</button>' +
+          '<button type="button" class="btn btn-danger" data-discard>Discard changes</button></div>';
+        var k = $('[data-keep]', disc); if (k) k.focus();
+        disc.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      closeSheet();
+    }
+  };
+  panel.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('[data-close]')) { api.requestClose(); return; }
+    if (t.closest('[data-keep]')) { disc.hidden = true; disc.innerHTML = ''; return; }
+    if (t.closest('[data-discard]')) { closeSheet(); }
+  });
+  api.onKey = function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); api.requestClose(); return; }
+    if (e.key !== 'Tab') return;
+    var items = panel.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])');
+    var vis = [];
+    for (var i = 0; i < items.length; i++) if (items[i].offsetParent !== null) vis.push(items[i]);
+    if (!vis.length) { e.preventDefault(); return; }
+    var first = vis[0], last = vis[vis.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === panel)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener('keydown', api.onKey, true);
+  document.body.appendChild(root);
+  document.body.classList.add('lock');
+  sheet = api;
+  return api;
+}
+
+/* ------------------------------------------------------------------
+   Auth screens
+------------------------------------------------------------------- */
+var app = document.getElementById('app');
+
+function brandBlock() {
+  return '<div class="auth-brand"><div class="b1">Mallonomo Enterprise</div><div class="b2">Price Manager</div></div>';
+}
+function bindShowPassword(form) {
+  var cb = $('[name=show]', form);
+  if (!cb) return;
+  cb.addEventListener('change', function () {
+    var pw = $('[name=password]', form);
+    if (pw) pw.type = cb.checked ? 'text' : 'password';
+  });
+}
+function validEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
+function authError(err, fallback) {
+  var m = String((err && err.message) || '').toLowerCase();
+  if (err && err.timeout) return 'The request took too long. Check your connection and try again.';
+  if (isNetwork(err)) return 'No internet connection. Check your connection and try again.';
+  if (/invalid login credentials|invalid credentials/.test(m)) return 'Email or password is incorrect.';
+  if (/email not confirmed/.test(m)) return 'Your email is not confirmed yet. Open the link we sent to your email, then log in.';
+  if (err && (err.status === 429 || /rate limit|too many/.test(m))) return 'Too many attempts. Please try again later.';
+  if (/banned|disabled|not allowed/.test(m)) return 'Your account is unavailable. Contact the owner.';
+  if (/password/.test(m) && /(short|least|weak|characters)/.test(m)) return 'Use at least 8 characters for your password.';
+  return fallback || 'Something went wrong. Try again.';
+}
+
+function renderAuth(mode) {
+  closeSheet(false);
+  mode = mode || 'login';
+  if (mode !== 'login') state.notice = '';
+  if (mode === 'login') return renderLogin();
+  if (mode === 'signup') return renderSignup();
+  if (mode === 'reset') return renderReset();
+}
+
+function renderLogin() {
+  var notice = state.notice;
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Log in</h1><p class="lead">Enter your staff login details to continue.</p>' +
+    (notice ? '<div class="form-ok" role="status">' + esc(notice) + '</div>' : '') +
+    '<div id="ferr" class="form-err" role="alert"></div>' +
+    '<form id="f" novalidate>' +
+    '<div class="field"><label for="email">Email address</label><input class="input" id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter your email address"></div>' +
+    '<div class="field"><label for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password"></div>' +
+    '<label class="check"><input type="checkbox" name="show"> Show password</label>' +
+    '<button class="btn btn-primary btn-block" type="submit" id="go">Log in</button></form>' +
+    '<div class="links"><button type="button" class="link" id="to-reset">Forgot password?</button>' +
+    '<button type="button" class="link" id="to-signup">New worker? Create an account</button></div>' +
+    '<p class="foot">For authorised staff only.</p></main>';
+  var form = $('#f'); bindShowPassword(form);
+  $('#to-reset').onclick = function () { renderAuth('reset'); };
+  $('#to-signup').onclick = function () { renderAuth('signup'); };
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = form.email.value.trim(), pw = form.password.value, box = $('#ferr'), go = $('#go');
+    box.textContent = ''; state.notice = '';
+    if (!email) { box.textContent = 'Enter your email address.'; form.email.focus(); return; }
+    if (!validEmail(email)) { box.textContent = 'Enter a valid email address.'; form.email.focus(); return; }
+    if (!pw) { box.textContent = 'Enter your password.'; form.password.focus(); return; }
+    go.disabled = true; go.textContent = 'Logging in...';
+    withTimeout(sb.auth.signInWithPassword({ email: email, password: pw }), 20000).then(function (r) {
+      if (r.error) { throw r.error; }
+      /* the auth listener takes over from here */
+    }).catch(function (err) {
+      go.disabled = false; go.textContent = 'Log in';
+      box.textContent = authError(err, 'Something went wrong. Try again.');
+    });
+  });
+}
+
+function renderSignup() {
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Create account</h1><p class="lead">Create your account. The owner must approve it before you can use Price Manager.</p>' +
+    '<div id="ferr" class="form-err" role="alert"></div>' +
+    '<form id="f" novalidate>' +
+    '<div class="field"><label for="fn">Full name</label><input class="input" id="fn" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Enter your full name"></div>' +
+    '<div class="field"><label for="email">Email address</label><input class="input" id="email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="Enter your email address"></div>' +
+    '<div class="field"><label for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="new-password" placeholder="Choose a password" aria-describedby="pwh"><p class="hint" id="pwh">Use at least 8 characters.</p></div>' +
+    '<label class="check"><input type="checkbox" name="show"> Show password</label>' +
+    '<button class="btn btn-primary btn-block" type="submit" id="go">Create account</button></form>' +
+    '<div class="links"><button type="button" class="link" id="to-login">Already have an account? Log in</button></div></main>';
+  var form = $('#f'); bindShowPassword(form);
+  $('#to-login').onclick = function () { renderAuth('login'); };
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = form.name.value.trim(), email = form.email.value.trim(), pw = form.password.value, box = $('#ferr'), go = $('#go');
+    box.textContent = '';
+    if (!name) { box.textContent = 'Enter your full name.'; form.name.focus(); return; }
+    if (!email) { box.textContent = 'Enter your email address.'; form.email.focus(); return; }
+    if (!validEmail(email)) { box.textContent = 'Enter a valid email address.'; form.email.focus(); return; }
+    if (pw.length < 8) { box.textContent = 'Use at least 8 characters for your password.'; form.password.focus(); return; }
+    go.disabled = true; go.textContent = 'Creating account...';
+    withTimeout(sb.auth.signUp({
+      email: email, password: pw,
+      options: { data: { full_name: name }, emailRedirectTo: window.location.origin + window.location.pathname }
+    }), 20000).then(function (r) {
+      if (r.error) throw r.error;
+      var u = r.data && r.data.user;
+      if (u && u.identities && u.identities.length === 0) {
+        go.disabled = false; go.textContent = 'Create account';
+        box.textContent = 'An account with this email address already exists. Log in instead.';
+        return;
+      }
+      if (r.data && r.data.session) return; /* confirmation is off: the auth listener continues */
+      app.innerHTML = '<main class="auth">' + brandBlock() +
+        '<h1>Check your email</h1><p class="lead">We sent a confirmation link to ' + esc(email) + '. Open it, then log in. The owner must approve your account before you can use Price Manager.</p>' +
+        '<button class="btn btn-block" id="back" type="button">Back to log in</button></main>';
+      $('#back').onclick = function () { renderAuth('login'); };
+    }).catch(function (err) {
+      go.disabled = false; go.textContent = 'Create account';
+      box.textContent = authError(err, 'Your account could not be created. Try again.');
+    });
+  });
+}
+
+function renderReset() {
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Reset password</h1><p class="lead">Enter your email address to receive a password reset link.</p>' +
+    '<div id="ferr" class="form-err" role="alert"></div><div id="fok" class="form-ok" role="status" hidden></div>' +
+    '<form id="f" novalidate>' +
+    '<div class="field"><label for="email">Email address</label><input class="input" id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter your email address"></div>' +
+    '<button class="btn btn-primary btn-block" type="submit" id="go">Send reset link</button></form>' +
+    '<div class="links"><button type="button" class="link" id="to-login">Back to log in</button></div></main>';
+  $('#to-login').onclick = function () { renderAuth('login'); };
+  var form = $('#f');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = form.email.value.trim(), box = $('#ferr'), ok = $('#fok'), go = $('#go');
+    box.textContent = ''; ok.hidden = true;
+    if (!email) { box.textContent = 'Enter your email address.'; form.email.focus(); return; }
+    if (!validEmail(email)) { box.textContent = 'Enter a valid email address.'; form.email.focus(); return; }
+    go.disabled = true; go.textContent = 'Sending...';
+    withTimeout(sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname }), 20000).then(function (r) {
+      go.disabled = false; go.textContent = 'Send reset link';
+      if (r.error && (isNetwork(r.error) || r.error.status === 429)) { box.textContent = authError(r.error, 'We could not send the reset link. Try again.'); return; }
+      ok.hidden = false; ok.textContent = 'If your account exists, a password reset link will be sent.';
+    }).catch(function (err) {
+      go.disabled = false; go.textContent = 'Send reset link';
+      box.textContent = authError(err, 'We could not send the reset link. Try again.');
+    });
+  });
+}
+
+function renderRecovery() {
+  closeSheet(false);
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Set a new password</h1><p class="lead">Choose a new password for your account.</p>' +
+    '<div id="ferr" class="form-err" role="alert"></div>' +
+    '<form id="f" novalidate>' +
+    '<div class="field"><label for="password">New password</label><input class="input" id="password" name="password" type="password" autocomplete="new-password" placeholder="Enter a new password" aria-describedby="pwh"><p class="hint" id="pwh">Use at least 8 characters.</p></div>' +
+    '<label class="check"><input type="checkbox" name="show"> Show password</label>' +
+    '<button class="btn btn-primary btn-block" type="submit" id="go">Save new password</button></form></main>';
+  var form = $('#f'); bindShowPassword(form);
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pw = form.password.value, box = $('#ferr'), go = $('#go');
+    box.textContent = '';
+    if (pw.length < 8) { box.textContent = 'Use at least 8 characters for your password.'; form.password.focus(); return; }
+    go.disabled = true; go.textContent = 'Saving...';
+    withTimeout(sb.auth.updateUser({ password: pw }), 20000).then(function (r) {
+      if (r.error) throw r.error;
+      state.recovery = false;
+      toast('Password updated.');
+      route();
+    }).catch(function (err) {
+      go.disabled = false; go.textContent = 'Save new password';
+      box.textContent = authError(err, 'Your password could not be updated. Request a new reset link and try again.');
+    });
+  });
+}
+
+function renderPending(profile) {
+  closeSheet(false);
+  var nm = profile && profile.full_name ? profile.full_name : '';
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Waiting for approval</h1>' +
+    '<p class="lead">Your account is waiting for approval' + (nm ? ', ' + esc(nm) : '') + '. The owner must approve it before you can use Price Manager. Ask the owner to approve your account, then check again.</p>' +
+    '<div id="ferr" class="form-err" role="alert"></div>' +
+    '<button class="btn btn-primary btn-block" id="again" type="button">Check again</button>' +
+    '<div class="links"><button class="link" id="out" type="button">Log out</button></div></main>';
+  $('#again').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Checking...';
+    route();
+  };
+  $('#out').onclick = doLogout;
+}
+
+function renderRouteError(msg) {
+  closeSheet(false);
+  app.innerHTML = '<main class="auth">' + brandBlock() +
+    '<h1>Could not load</h1><p class="lead">' + esc(msg) + '</p>' +
+    '<button class="btn btn-primary btn-block" id="retry" type="button">Try again</button>' +
+    '<div class="links"><button class="link" id="out" type="button">Log out</button></div></main>';
+  $('#retry').onclick = function () { route(); };
+  $('#out').onclick = doLogout;
+}
+
+/* ------------------------------------------------------------------
+   Routing
+------------------------------------------------------------------- */
+function route() {
+  var token = ++state.routeToken;
+  if (state.recovery) { renderRecovery(); return; }
+  if (!state.session || !state.userId) {
+    resetData(); clearCache();
+    renderAuth('login');
+    return;
+  }
+  app.innerHTML = '<p class="center-msg">Loading...</p>';
+  timed(function (sig) {
+    return sb.from('profiles').select('id,full_name,role,active').eq('id', state.userId).abortSignal(sig).maybeSingle();
+  }, 15000).then(function (r) {
+    if (token !== state.routeToken) return;
+    if (r.error) {
+      if (isExpired(r.error)) { state.notice = 'Your session has expired. Log in again.'; sb.auth.signOut().then(function () { state.session = null; state.userId = null; route(); }); return; }
+      renderRouteError(r.error.timeout ? 'The request took too long. Check your connection and try again.' :
+        isNetwork(r.error) ? 'No internet connection. Check your connection and try again.' : 'Something went wrong. Try again.');
+      return;
+    }
+    if (!r.data || !r.data.active) { state.profile = r.data; renderPending(r.data); return; }
+    state.profile = r.data;
+    renderMain();
+  });
+}
+
+function doLogout() {
+  function finish() {
+    state.session = null; state.userId = null; state.recovery = false;
+    resetData(); clearCache(); closeSheet(false);
+    route();
+  }
+  Promise.resolve(sb.auth.signOut()).then(finish, finish);
+}
+
+/* ------------------------------------------------------------------
+   Main screen
+------------------------------------------------------------------- */
+function renderMain() {
+  closeSheet(false);
+  var name = state.profile && state.profile.full_name ? state.profile.full_name : (state.session && state.session.user ? state.session.user.email : '');
+  app.innerHTML =
+    '<header class="top"><div class="top-in"><div><div class="brand">Mallonomo Enterprise</div><h1 class="title">Price Manager</h1></div>' +
+    '<button class="btn" id="logout" type="button">Log out</button></div>' +
+    '<div class="who">Logged in as ' + esc(name) + '</div></header>' +
+    '<main class="wrap">' +
+    '<div class="sec-head"><h2>Products</h2><button class="btn btn-primary" id="add" type="button">Add product</button></div>' +
+    '<div id="banner"></div>' +
+    '<div class="search"><label class="sr" for="q">Search products</label>' +
+    '<input class="input" id="q" type="search" placeholder="Search by product name or barcode" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search">' +
+    '<button class="clear" id="qclear" type="button" aria-label="Clear search" hidden>\u00D7</button></div>' +
+    '<div class="filters"><div><label class="sr" for="cat">Category</label><select class="input" id="cat"></select></div>' +
+    '<div><label class="sr" for="stk">Stock status</label><select class="input" id="stk">' +
+    '<option value="">All stock statuses</option><option value="in">In stock</option><option value="out">Out of stock</option></select></div></div>' +
+    '<div class="meta"><span id="count"></span><button class="link" id="refresh" type="button">Refresh list</button></div>' +
+    '<div id="listbox"></div></main>';
+
+  $('#logout').onclick = confirmLogout;
+  $('#add').onclick = openAddSheet;
+  $('#refresh').onclick = function () { loadData({}); };
+  var q = $('#q');
+  q.addEventListener('input', function () { state.q = q.value; state.limit = PAGE; $('#qclear').hidden = !q.value; renderList(); });
+  $('#qclear').onclick = function () { q.value = ''; state.q = ''; state.limit = PAGE; this.hidden = true; renderList(); q.focus(); };
+  $('#cat').addEventListener('change', function () { state.cat = this.value; state.limit = PAGE; renderList(); });
+  $('#stk').addEventListener('change', function () { state.stock = this.value; state.limit = PAGE; renderList(); });
+  $('#listbox').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+    var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
+    if (act === 'price') openPriceSheet(id);
+    else if (act === 'stock') openStockSheet(id);
+    else if (act === 'more') { state.limit += PAGE; renderList(); }
+    else if (act === 'retry') loadData({});
+  });
+
+  q.value = state.q; $('#qclear').hidden = !state.q; $('#stk').value = state.stock;
+  fillCategoryFilter();
+  var hadCache = loadCache();
+  if (hadCache) { fillCategoryFilter(); state.loadedOnce = true; }
+  renderBanner();
+  renderList();
+  loadData({});
+}
+
+function fillCategoryFilter() {
+  var sel = $('#cat'); if (!sel) return;
+  var html = '<option value="">All categories</option>';
+  state.categories.forEach(function (c) { html += '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; });
+  sel.innerHTML = html;
+  sel.value = state.cat || '';
+  if (sel.value !== (state.cat || '')) { state.cat = ''; sel.value = ''; }
+}
+
+function renderBanner() {
+  var b = $('#banner'); if (!b) return;
+  if (state.fresh || !state.loadedOnce) {
+    b.innerHTML = '';
+    return;
+  }
+  if (state.loadError) {
+    b.innerHTML = '<div class="banner bad" role="alert">Could not update the list. This list was saved at ' + esc(state.loadedAt ? fmtTime(state.loadedAt) : 'an earlier time') +
+      ' and may be out of date. Editing is off until the list updates.<button class="link" type="button" id="bretry">Try again</button></div>';
+    var r = $('#bretry'); if (r) r.onclick = function () { loadData({}); };
+  } else {
+    b.innerHTML = '<div class="banner info" role="status">Showing the saved list while the latest prices load. Editing is off until the list updates.</div>';
+  }
+}
+
+function filteredProducts() {
+  var terms = state.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return state.products.filter(function (p) {
+    if (state.cat && p.category_id !== state.cat) return false;
+    if (state.stock === 'in' && !p.in_stock) return false;
+    if (state.stock === 'out' && p.in_stock) return false;
+    if (terms.length) {
+      var hay = (p.name + ' ' + (p.barcode || '')).toLowerCase();
+      for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) === -1) return false;
+    }
+    return true;
+  });
+}
+
+function rowHTML(p) {
+  var cat = state.catMap[p.category_id] || '';
+  var who = p.updated_by && state.names[p.updated_by] ? ' by ' + state.names[p.updated_by] : '';
+  var dis = state.fresh ? '' : ' disabled';
+  var id = esc(p.id), nm = esc(p.name);
+  return '<li class="item' + (p.in_stock ? '' : ' out') + '">' +
+    '<div class="item-top"><div class="item-info"><h3 class="name">' + nm + '</h3>' +
+    '<p class="unit">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
+    (cat ? '<p class="cat">' + esc(cat) + '</p>' : '') +
+    (p.barcode ? '<p class="cat">Barcode ' + esc(p.barcode) + '</p>' : '') + '</div>' +
+    '<div class="item-price"><p class="price">' + money(p.price) + '</p>' +
+    '<p class="stock ' + (p.in_stock ? 'in' : 'outs') + '">' + (p.in_stock ? 'In stock' : 'Out of stock') + '</p></div></div>' +
+    '<p class="stamp">Last updated: ' + esc(fmtDate(p.updated_at)) + esc(who) + '</p>' +
+    '<div class="item-actions">' +
+    '<button class="btn btn-primary" type="button" data-act="price" data-id="' + id + '"' + dis + ' aria-label="Edit price for ' + nm + '">Edit price</button>' +
+    '<button class="btn btn-quiet" type="button" data-act="stock" data-id="' + id + '"' + dis + ' aria-label="Update stock status for ' + nm + '">' +
+    (p.in_stock ? 'Mark as out of stock' : 'Mark as in stock') + '</button></div></li>';
+}
+
+function renderList() {
+  var box = $('#listbox'); if (!box) return;
+  var count = $('#count');
+  var qc = $('#qclear'); if (qc) qc.hidden = !state.q;
+
+  if (!state.loadedOnce) {
+    if (state.loadError) {
+      box.innerHTML = '<div class="banner bad" role="alert">' + esc(state.loadError) + '<button class="link" type="button" data-act="retry">Try again</button></div>';
+    } else {
+      box.innerHTML = '<p class="empty">Loading products...</p>';
+    }
+    if (count) count.textContent = '';
+    return;
+  }
+  var all = filteredProducts();
+  if (count) {
+    count.textContent = all.length + (all.length === 1 ? ' product' : ' products') + (state.loadedAt ? ', updated ' + fmtTime(state.loadedAt) : '');
+  }
+  if (!all.length) {
+    var msg;
+    if (!state.products.length) msg = 'No products yet. Add a product to get started.';
+    else if (state.q.trim()) msg = 'No products match your search.';
+    else if (state.cat && !state.stock) msg = 'No products in this category.';
+    else if (state.stock && !state.cat) msg = 'No products match this stock status.';
+    else msg = 'No products match your search.';
+    box.innerHTML = '<p class="empty">' + msg + '</p>';
+    return;
+  }
+  var shown = all.slice(0, state.limit);
+  var html = '<ul class="list">';
+  for (var i = 0; i < shown.length; i++) html += rowHTML(shown[i]);
+  html += '</ul>';
+  if (all.length > shown.length) html += '<button class="btn btn-block more" type="button" data-act="more">Show more products</button>';
+  box.innerHTML = html;
+}
+
+/* ------------------------------------------------------------------
+   Loading data
+------------------------------------------------------------------- */
+function loadData(opts) {
+  opts = opts || {};
+  var token = ++state.loadToken;
+  if (state.loading && !opts.force) { /* a newer call supersedes the older one */ }
+  state.loading = true;
+  if (!opts.quiet) { state.fresh = false; state.loadError = ''; renderBanner(); renderList(); }
+  var rf = $('#refresh'); if (rf && !opts.quiet) { rf.disabled = true; }
+
+  var ctrl = new AbortController();
+  var hit = false;
+  var timer = setTimeout(function () { hit = true; ctrl.abort(); }, 30000);
+
+  function fail(err) {
+    clearTimeout(timer);
+    if (token !== state.loadToken) return;
+    state.loading = false;
+    var msg = (hit || (err && err.timeout)) ? 'The request took too long. Check the latest data before retrying.' :
+      isNetwork(err) ? 'Products could not be loaded. Check your connection and try again.' :
+      isExpired(err) ? 'Your session has expired. Log in again.' :
+      'Products could not be loaded. Check your connection and try again.';
+    if (isExpired(err)) { state.notice = msg; doLogout(); return; }
+    if (rf) rf.disabled = false;
+    if (opts.quiet) return;
+    state.loadError = msg;
+    renderBanner(); renderList();
+  }
+
+  function fetchProducts() {
+    var out = [], from = 0, size = 1000;
+    function step() {
+      return sb.from('products').select(PCOLS).order('name').order('id').range(from, from + size - 1).abortSignal(ctrl.signal).then(function (r) {
+        if (r.error) throw r.error;
+        out = out.concat(r.data || []);
+        if (r.data && r.data.length === size) { from += size; return step(); }
+        return out;
+      });
+    }
+    return step();
+  }
+
+  sb.from('profiles').select('id,full_name,role,active').eq('id', state.userId).abortSignal(ctrl.signal).maybeSingle().then(function (pr) {
+    if (pr.error) throw pr.error;
+    if (!pr.data || !pr.data.active) { clearTimeout(timer); if (token === state.loadToken) { state.loading = false; route(); } return null; }
+    state.profile = pr.data;
+    return Promise.all([
+      fetchProducts(),
+      sb.from('categories').select('id,name,sort_order').order('sort_order').order('name').abortSignal(ctrl.signal),
+      sb.rpc('staff_names').abortSignal(ctrl.signal)
+    ]);
+  }).then(function (res) {
+    if (!res) return;
+    clearTimeout(timer);
+    if (token !== state.loadToken) return;
+    var cats = res[1], nms = res[2];
+    if (cats.error) throw cats.error;
+    if (nms.error) throw nms.error;
+    state.products = res[0];
+    state.categories = cats.data || [];
+    state.names = {};
+    (nms.data || []).forEach(function (n) { state.names[n.id] = n.full_name; });
+    rebuildCatMap(); sortProducts();
+    state.fresh = true; state.loadedOnce = true; state.loadError = ''; state.loadedAt = Date.now(); state.loading = false;
+    saveCache();
+    fillCategoryFilter();
+    renderBanner(); renderList();
+    var rf2 = $('#refresh'); if (rf2) rf2.disabled = false;
+  }).catch(fail);
+}
+
+/* ------------------------------------------------------------------
+   Price edit
+------------------------------------------------------------------- */
+function parsePrice(raw, missingMsg) {
+  var s = String(raw || '').replace(/[\u20A6,\s]/g, '');
+  if (!s) return { err: missingMsg };
+  if (!/^(\d+(\.\d{1,2})?|\.\d{1,2})$/.test(s)) return { err: 'Enter a valid price greater than zero.' };
+  var n = Number(s);
+  if (!(n > 0)) return { err: 'Enter a valid price greater than zero.' };
+  if (n > MAX_PRICE) return { err: 'This price exceeds the allowed limit. Contact the owner.' };
+  return { value: Math.round(n * 100) / 100 };
+}
+function writeErr(err, fallback) {
+  if (!err) return fallback;
+  if (err.timeout) return 'The request took too long. Check the latest data before retrying.';
+  if (isNetwork(err)) return 'No internet connection. Check your connection and try again.';
+  if (isExpired(err)) return 'Your session has expired. Log in again.';
+  if (err.code === '42501') return 'You do not have permission to perform this action.';
+  return fallback;
+}
+
+function openPriceSheet(id) {
+  var p = byId(id);
+  if (!p) { toast('This product could not be found. It may have been removed.', true); return; }
+  if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
+  var s = openSheet({ title: 'Edit price', discardMsg: 'Your price change has not been saved. Discard it?' });
+  var typed = '';
+
+  function drawEdit(msg) {
+    s.setTitle('Edit price');
+    s.dirty = function () { var i = $('#np', s.body); return !!(i && i.value.trim()); };
+    s.set('<p class="sheet-name">' + esc(p.name) + '</p>' +
+      '<p class="hint">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
+      '<p class="label" style="margin-top:14px">Current price</p><p class="big-price">' + money(p.price) + '</p>' +
+      (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<form id="pf" novalidate><div class="field"><label for="np">New price (\u20A6)</label>' +
+      '<input class="input" id="np" inputmode="decimal" autocomplete="off" placeholder="Enter new price" aria-describedby="nph npe" value="' + esc(typed) + '">' +
+      '<p class="hint" id="nph">Enter the selling price for the selected unit.</p><p class="err" id="npe" role="alert"></p></div>' +
+      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Review change</button></div></form>', '#np');
+    $('#pf', s.body).addEventListener('submit', function (e) {
+      e.preventDefault();
+      var inp = $('#np', s.body), er = $('#npe', s.body);
+      typed = inp.value;
+      var r = parsePrice(inp.value, 'Enter the new price.');
+      if (r.err) { er.textContent = r.err; inp.focus(); return; }
+      if (r.value === Number(p.price)) { er.textContent = 'The new price is the same as the current price.'; inp.focus(); return; }
+      drawConfirm(r.value);
+    });
+  }
+
+  function drawConfirm(newPrice, msg) {
+    s.setTitle('Confirm price change');
+    s.dirty = function () { return true; };
+    var oldP = Number(p.price);
+    var pct = Math.round(((newPrice - oldP) / oldP) * 100);
+    var big = Math.abs(pct) >= 30;
+    s.set((msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<p>Change the price of <strong>' + esc(p.name) + '</strong> from <strong>' + money(oldP) + '</strong> to <strong>' + money(newPrice) + '</strong>?</p>' +
+      (big ? '<p class="warnline">This is a ' + (pct > 0 ? 'rise' : 'drop') + ' of ' + Math.abs(pct) + '%. Check the amount before saving.</p>' : '') +
+      '<div class="actions"><button class="btn" type="button" id="back">Back</button><button class="btn btn-primary" type="button" id="save">Save new price</button></div>', '#save');
+    $('#back', s.body).onclick = function () { typed = String(newPrice); drawEdit(); };
+    $('#save', s.body).onclick = function () { save(newPrice); };
+  }
+
+  function save(newPrice) {
+    var btn = $('#save', s.body), back = $('#back', s.body);
+    if (s.busy) return;
+    s.busy = true; btn.disabled = true; back.disabled = true; btn.textContent = 'Saving price...';
+    var oldP = p.price;
+    timed(function (sig) {
+      return sb.from('products').update({ price: newPrice }).eq('id', p.id).eq('price', oldP).select(PCOLS).abortSignal(sig);
+    }, 15000).then(function (r) {
+      if (r.error) {
+        s.busy = false;
+        var m = writeErr(r.error, 'Price could not be updated. No change was confirmed. Try again.');
+        if (isExpired(r.error)) { closeSheet(false); state.notice = m; doLogout(); return; }
+        drawConfirm(newPrice, m); return;
+      }
+      if (r.data && r.data.length) {
+        var row = r.data[0];
+        for (var i = 0; i < state.products.length; i++) if (state.products[i].id === row.id) state.products[i] = row;
+        state.loadedAt = Date.now(); saveCache(); renderList();
+        s.busy = false; closeSheet();
+        toast('Price updated successfully.');
+        return;
+      }
+      /* no row matched: the price changed, or the product is gone */
+      timed(function (sig) { return sb.from('products').select(PCOLS).eq('id', p.id).abortSignal(sig).maybeSingle(); }, 15000).then(function (g) {
+        s.busy = false;
+        if (g.error) { drawConfirm(newPrice, writeErr(g.error, 'Price could not be updated. No change was confirmed. Try again.')); return; }
+        if (!g.data) {
+          state.products = state.products.filter(function (x) { return x.id !== p.id; });
+          saveCache(); renderList(); closeSheet();
+          toast('This product could not be found. It may have been removed.', true);
+          return;
+        }
+        for (var j = 0; j < state.products.length; j++) if (state.products[j].id === g.data.id) state.products[j] = g.data;
+        p = g.data; typed = ''; saveCache(); renderList();
+        drawEdit('This price was changed by another worker. Refresh and review the latest price.');
+      });
+    });
+  }
+
+  drawEdit();
+}
+
+/* ------------------------------------------------------------------
+   Stock status
+------------------------------------------------------------------- */
+function openStockSheet(id) {
+  var p = byId(id);
+  if (!p) { toast('This product could not be found. It may have been removed.', true); return; }
+  if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
+  var target = !p.in_stock;
+  var label = target ? 'In stock' : 'Out of stock';
+  var s = openSheet({ title: 'Update stock status' });
+  s.set('<p>Change <strong>' + esc(p.name) + '</strong> to <strong>' + label + '</strong>?</p><div id="serr" class="form-err" role="alert" style="margin-top:12px"></div>' +
+    '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="button" id="go">' +
+    (target ? 'Mark as in stock' : 'Mark as out of stock') + '</button></div>', '#go');
+  $('#go', s.body).onclick = function () {
+    if (s.busy) return;
+    var btn = this; s.busy = true; btn.disabled = true; btn.textContent = 'Saving...';
+    $('#serr', s.body).textContent = '';
+    timed(function (sig) {
+      return sb.from('products').update({ in_stock: target }).eq('id', p.id).select(PCOLS).abortSignal(sig);
+    }, 15000).then(function (r) {
+      s.busy = false;
+      if (r.error || !r.data || !r.data.length) {
+        btn.disabled = false; btn.textContent = target ? 'Mark as in stock' : 'Mark as out of stock';
+        if (r.error && isExpired(r.error)) { closeSheet(false); state.notice = 'Your session has expired. Log in again.'; doLogout(); return; }
+        $('#serr', s.body).textContent = r.error ? writeErr(r.error, 'Stock status could not be updated. Try again.') :
+          'Stock status could not be updated. Refresh the list and try again.';
+        return;
+      }
+      var row = r.data[0];
+      for (var i = 0; i < state.products.length; i++) if (state.products[i].id === row.id) state.products[i] = row;
+      state.loadedAt = Date.now(); saveCache(); renderList();
+      closeSheet();
+      toast('Stock status updated.');
+    });
+  };
+}
+
+/* ------------------------------------------------------------------
+   Add product
+------------------------------------------------------------------- */
+function openAddSheet() {
+  if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
+  var s = openSheet({ title: 'Add product', discardMsg: 'Discard this new product?' });
+  var catOpts = '<option value="">Select a category</option>';
+  state.categories.forEach(function (c) { catOpts += '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; });
+  var unitOpts = '<option value="">Select a unit</option>';
+  UNITS.forEach(function (u) { unitOpts += '<option value="' + esc(u) + '">' + esc(u) + '</option>'; });
+  s.dirty = function () {
+    var f = $('#af', s.body); if (!f) return false;
+    return !!(f.name.value.trim() || f.barcode.value.trim() || f.price.value.trim() || f.category.value || f.unit.value);
+  };
+  s.set((state.categories.length ? '' : '<div class="form-err" role="alert">No categories available. Contact the owner.</div>') +
+    '<div id="aerr" class="form-err" role="alert"></div>' +
+    '<form id="af" novalidate>' +
+    '<div class="field"><label for="a-name">Product name</label><input class="input" id="a-name" name="name" maxlength="120" autocomplete="off" placeholder="Enter product name"></div>' +
+    '<div class="field"><label for="a-bar">Barcode (optional)</label><input class="input" id="a-bar" name="barcode" maxlength="64" autocomplete="off" inputmode="numeric" placeholder="Enter barcode"></div>' +
+    '<div class="field"><label for="a-cat">Category</label><select class="input" id="a-cat" name="category">' + catOpts + '</select></div>' +
+    '<div class="field"><label for="a-price">Selling price (\u20A6)</label><input class="input" id="a-price" name="price" inputmode="decimal" autocomplete="off" placeholder="Enter selling price"></div>' +
+    '<div class="field"><label for="a-unit">Unit</label><select class="input" id="a-unit" name="unit">' + unitOpts + '</select></div>' +
+    '<div class="field"><label for="a-stock">Stock status</label><select class="input" id="a-stock" name="stock"><option value="in">In stock</option><option value="out">Out of stock</option></select></div>' +
+    '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="asave">Add product</button></div></form>', '#a-name');
+  var f = $('#af', s.body);
+  f.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var box = $('#aerr', s.body); box.textContent = '';
+    var name = f.name.value.trim().replace(/\s+/g, ' ');
+    var barcode = f.barcode.value.trim();
+    if (!name) { box.textContent = 'Enter a product name.'; f.name.focus(); return; }
+    if (!f.category.value) { box.textContent = 'Select a category.'; f.category.focus(); return; }
+    var pr = parsePrice(f.price.value, 'Enter a valid selling price greater than zero.');
+    if (pr.err) { box.textContent = pr.err; f.price.focus(); return; }
+    if (!f.unit.value) { box.textContent = 'Select a unit.'; f.unit.focus(); return; }
+    var dup = state.products.some(function (x) { return x.name.toLowerCase() === name.toLowerCase() && x.unit === f.unit.value; });
+    if (dup) { box.textContent = 'A product with this name or barcode may already exist. Check the product list.'; f.name.focus(); return; }
+    var btn = $('#asave', s.body);
+    if (s.busy) return;
+    s.busy = true; btn.disabled = true; btn.textContent = 'Adding product...';
+    timed(function (sig) {
+      return sb.from('products').insert({
+        name: name, barcode: barcode || null, category_id: f.category.value, unit: f.unit.value,
+        price: pr.value, in_stock: f.stock.value === 'in'
+      }).select(PCOLS).abortSignal(sig);
+    }, 15000).then(function (r) {
+      s.busy = false;
+      if (r.error || !r.data || !r.data.length) {
+        btn.disabled = false; btn.textContent = 'Add product';
+        var err = r.error;
+        if (err && isExpired(err)) { closeSheet(false); state.notice = 'Your session has expired. Log in again.'; doLogout(); return; }
+        box.textContent = err && err.code === '23505' ? 'This barcode is already assigned to another product.' :
+          writeErr(err, 'Product could not be added. Try again.');
+        return;
+      }
+      state.products.push(r.data[0]); sortProducts();
+      state.loadedAt = Date.now(); saveCache(); renderList();
+      closeSheet();
+      toast('Product added successfully.');
+    });
+  });
+}
+
+/* ------------------------------------------------------------------
+   Log out
+------------------------------------------------------------------- */
+function confirmLogout() {
+  var s = openSheet({ title: 'Log out' });
+  s.set('<p>Do you want to log out?</p><div class="actions"><button class="btn" type="button" data-close>Stay logged in</button>' +
+    '<button class="btn btn-primary" type="button" id="yes">Log out</button></div>', '#yes');
+  $('#yes', s.body).onclick = function () { this.disabled = true; closeSheet(false); doLogout(); };
+}
+
+/* ------------------------------------------------------------------
+   Boot
+------------------------------------------------------------------- */
+if (/error_code=otp_expired|error=access_denied/.test(initialHash)) {
+  state.notice = 'That link has expired. Log in, or reset your password to get a new link.';
+}
+if (initialHash && /access_token|error_description|error_code/.test(initialHash)) {
+  setTimeout(function () {
+    try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) { /* ignore */ }
+  }, 1500);
+}
+
+sb.auth.onAuthStateChange(function (event, session) {
+  booted = true;
+  if (event === 'TOKEN_REFRESHED') { state.session = session; return; }
+  if (event === 'PASSWORD_RECOVERY') state.recovery = true;
+  var newId = session && session.user ? session.user.id : null;
+  if (event === 'SIGNED_IN' && newId && newId === state.userId && !state.recovery) { state.session = session; return; }
+  if (event === 'USER_UPDATED' && newId && newId === state.userId) { state.session = session; return; }
+  state.session = session; state.userId = newId;
+  setTimeout(route, 0);
+});
+
+setTimeout(function () {
+  if (booted) return;
+  sb.auth.getSession().then(function (r) {
+    if (booted) return;
+    booted = true;
+    state.session = r.data && r.data.session ? r.data.session : null;
+    state.userId = state.session && state.session.user ? state.session.user.id : null;
+    route();
+  }, function () { booted = true; route(); });
+}, 2500);
+
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible') return;
+  if (!state.profile || !state.loadedAt || sheet || state.loading) return;
+  if (Date.now() - state.loadedAt > 5 * 60 * 1000) loadData({ quiet: true });
+});
+
+})();
+</script>
+</body>
+</html>

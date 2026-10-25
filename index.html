@@ -66,10 +66,9 @@ button,input,select{font:inherit;color:inherit}
 
 /* App shell */
 .top{background:var(--brand);color:#fff;padding-top:env(safe-area-inset-top)}
-.top-in{max-width:760px;margin:0 auto;padding:12px 16px 4px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.brand{font-size:.8125rem;opacity:.85}
-.title{font-size:1.25rem;font-weight:700;letter-spacing:-.01em}
-.who{max-width:760px;margin:0 auto;padding:0 16px 12px;font-size:.875rem;opacity:.9}
+.top-in{max-width:760px;margin:0 auto;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{font-size:.75rem;opacity:.85;line-height:1.2}
+.title{font-size:1.0625rem;font-weight:700;letter-spacing:-.01em;line-height:1.25}
 .top .btn{background:transparent;border-color:rgba(255,255,255,.6);color:#fff;min-height:44px}
 .top .btn:hover{background:rgba(255,255,255,.12)}
 .top :focus-visible{outline-color:#fff}
@@ -77,10 +76,29 @@ button,input,select{font:inherit;color:inherit}
 .sec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
 .sec-head h2{font-size:1.375rem;letter-spacing:-.01em}
 .search{position:relative;margin-bottom:10px}
+.searchrow{display:flex;gap:10px;align-items:flex-start;margin-bottom:6px}
+.searchrow .search{flex:1;min-width:0;margin-bottom:0}
+.searchrow .input{min-height:56px;font-size:1.0625rem}
+.addbtn{flex:none;min-width:84px;min-height:56px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font-weight:700;font-size:1rem;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.addbtn::before{content:"+";font-size:1.625rem;font-weight:500;line-height:1;margin-top:-2px}
+.addbtn:hover{background:var(--accent-hover)}
+.sec2{font-size:1.0625rem;letter-spacing:-.01em;margin:22px 0 10px}
+.sec2.first{margin-top:6px}
+.link.back{padding:0;min-height:44px;display:inline-block}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tile{display:flex;flex-direction:column;justify-content:space-between;gap:10px;min-height:84px;padding:12px;text-align:left;background:var(--surface);border:1.5px solid var(--line);border-radius:6px;cursor:pointer;color:var(--ink)}
+.tile:hover{background:#F6F8F7}
+.tile .tn{font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+.tile .tc{color:var(--muted);font-size:.875rem;font-variant-numeric:tabular-nums}
+.tile.solid{background:var(--brand);border-color:var(--brand);color:#fff}
+.tile.solid:hover{background:#0A2D1D}
+.tile.solid .tc{color:#fff;opacity:.85}
+.tile.warn{background:var(--warn-bg);border-color:#D9B24C}
+.tile.warn .tc{color:var(--warn-ink)}
+.tile.bad{border-color:var(--danger)}
+.tile.bad .tn{color:var(--danger)}
 .search .input{padding-right:48px}
 .search .clear{position:absolute;right:2px;top:2px;width:44px;height:44px;border:0;background:none;font-size:1.5rem;line-height:1;color:var(--muted);cursor:pointer}
-.filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
-@media (max-width:440px){.filters{grid-template-columns:1fr}}
 .input::placeholder{color:#5F6D65;font-size:.9375rem}
 .meta{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:.9375rem;margin-bottom:6px}
 .banner{border-radius:6px;padding:12px;margin-bottom:12px;font-weight:600}
@@ -201,7 +219,7 @@ var sb = window.supabase.createClient(CFG.url, CFG.key, {
 var state = {
   session: null, userId: null, profile: null, recovery: false,
   products: [], categories: [], catMap: {}, names: {},
-  q: '', cat: '', stock: '', limit: PAGE, unpricedOnly: false,
+  q: '', browse: null, limit: PAGE,
   fresh: false, loadedAt: null, loadedOnce: false, loadError: '', loadToken: 0, loading: false,
   view: 'products', histProduct: null, workers: [], hist: null,
   routeToken: 0, notice: ''
@@ -304,7 +322,7 @@ function loadCache() {
 function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* ignore */ } }
 function resetData() {
   state.products = []; state.categories = []; state.catMap = {}; state.names = {};
-  state.q = ''; state.cat = ''; state.stock = ''; state.limit = PAGE; state.unpricedOnly = false;
+  state.q = ''; state.browse = null; state.limit = PAGE;
   state.fresh = false; state.loadedAt = null; state.loadedOnce = false; state.loadError = ''; state.profile = null;
   state.view = 'products'; state.histProduct = null; state.workers = []; state.hist = null;
 }
@@ -634,8 +652,7 @@ function renderMain() {
   var nav = tabs.map(function (t) { return '<button class="tab" type="button" data-view="' + t[0] + '">' + t[1] + '</button>'; }).join('');
   app.innerHTML =
     '<header class="top"><div class="top-in"><div><div class="brand">Mallonomo Enterprise</div><h1 class="title">Price Manager</h1></div>' +
-    '<button class="btn" id="logout" type="button">Log out</button></div>' +
-    '<div class="who">Logged in as ' + esc(name) + '</div></header>' +
+    '<button class="btn" id="logout" type="button">Log out</button></div></header>' +
     '<div id="view"></div><nav class="tabs" aria-label="Main navigation">' + nav + '</nav>';
   $('#logout').onclick = confirmLogout;
   var btns = app.querySelectorAll('.tab');
@@ -672,47 +689,36 @@ function showView(v) {
 function renderProductsView(box) {
   box.innerHTML =
     '<main class="wrap">' +
-    '<div class="sec-head"><h2>Products</h2><button class="btn btn-primary" id="add" type="button">Add product</button></div>' +
-    '<div id="banner"></div>' +
-    '<div class="search"><label class="sr" for="q">Search products</label>' +
-    '<input class="input" id="q" type="search" placeholder="Search by product name or barcode" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search">' +
+    '<div class="searchrow"><div class="search"><label class="sr" for="q">Search products</label>' +
+    '<input class="input" id="q" type="search" placeholder="Search name or barcode" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search">' +
     '<button class="clear" id="qclear" type="button" aria-label="Clear search" hidden>\u00D7</button></div>' +
-    '<div class="filters"><div><label class="sr" for="cat">Category</label><select class="input" id="cat"></select></div>' +
-    '<div><label class="sr" for="stk">Stock status</label><select class="input" id="stk">' +
-    '<option value="">All stock statuses</option><option value="in">In stock</option><option value="out">Out of stock</option></select></div></div>' +
-    '<div class="meta"><span id="count"></span><button class="link" id="refresh" type="button">Refresh list</button></div>' +
-    '<div id="listbox"></div></main>';
+    '<button class="addbtn" id="add" type="button" aria-label="Add product">Add</button></div>' +
+    '<div id="banner"></div><div id="listbox"></div></main>';
   $('#add').onclick = openAddSheet;
-  $('#refresh').onclick = function () { loadData({}); };
   var q = $('#q');
-  q.addEventListener('input', function () { state.q = q.value; state.limit = PAGE; $('#qclear').hidden = !q.value; renderList(); });
-  $('#qclear').onclick = function () { q.value = ''; state.q = ''; state.limit = PAGE; this.hidden = true; renderList(); q.focus(); };
-  $('#cat').addEventListener('change', function () { state.cat = this.value; state.limit = PAGE; renderList(); });
-  $('#stk').addEventListener('change', function () { state.stock = this.value; state.limit = PAGE; renderList(); });
+  q.addEventListener('input', function () {
+    state.q = q.value; state.browse = null; state.limit = PAGE; renderList();
+  });
+  $('#qclear').onclick = function () { q.value = ''; state.q = ''; state.limit = PAGE; renderList(); q.focus(); };
   $('#listbox').addEventListener('click', function (e) {
     var b = e.target.closest && e.target.closest('[data-act]');
     if (!b || b.disabled) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'open') openDetailSheet(id);
-    else if (act === 'unp-on') { state.unpricedOnly = true; state.limit = PAGE; renderList(); }
-    else if (act === 'unp-off') { state.unpricedOnly = false; state.limit = PAGE; renderList(); }
+    else if (act === 'browse') {
+      var t = b.getAttribute('data-type');
+      state.browse = t === 'cat' ? { type: 'cat', id: id } : { type: t };
+      state.limit = PAGE; renderList(); window.scrollTo(0, 0);
+    }
+    else if (act === 'home') { state.browse = null; state.limit = PAGE; renderList(); window.scrollTo(0, 0); }
+    else if (act === 'refresh') loadData({});
     else if (act === 'more') { state.limit += PAGE; renderList(); }
     else if (act === 'retry') loadData({});
   });
-  q.value = state.q; $('#qclear').hidden = !state.q; $('#stk').value = state.stock;
-  fillCategoryFilter();
+  q.value = state.q; $('#qclear').hidden = !state.q;
   renderBanner();
   renderList();
-  var rf = $('#refresh'); if (rf && state.loading) rf.disabled = true;
-}
-
-function fillCategoryFilter() {
-  var sel = $('#cat'); if (!sel) return;
-  var html = '<option value="">All categories</option>';
-  state.categories.forEach(function (c) { html += '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; });
-  sel.innerHTML = html;
-  sel.value = state.cat || '';
-  if (sel.value !== (state.cat || '')) { state.cat = ''; sel.value = ''; }
+  if (window.matchMedia && !window.matchMedia('(pointer: coarse)').matches) q.focus();
 }
 
 function renderBanner() {
@@ -732,11 +738,13 @@ function renderBanner() {
 
 function filteredProducts() {
   var terms = state.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  var br = state.browse;
   return state.products.filter(function (p) {
-    if (state.cat && p.category_id !== state.cat) return false;
-    if (state.stock === 'in' && !p.in_stock) return false;
-    if (state.stock === 'out' && p.in_stock) return false;
-    if (state.unpricedOnly && Number(p.price) > 0) return false;
+    if (br) {
+      if (br.type === 'cat' && p.category_id !== br.id) return false;
+      if (br.type === 'unpriced' && Number(p.price) > 0) return false;
+      if (br.type === 'out' && p.in_stock) return false;
+    }
     if (terms.length) {
       var hay = (p.name + ' ' + (p.barcode || '')).toLowerCase();
       for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) === -1) return false;
@@ -762,9 +770,38 @@ function rowHTML(p) {
     '<span class="item-price">' + priceHTML + '<span class="stock ' + (p.in_stock ? 'in' : 'outs') + '">' + stockLabel + '</span></span></span></button></li>';
 }
 
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+function metaHTML(text) {
+  return '<div class="meta"><span>' + esc(text) + '</span><button class="link" type="button" data-act="refresh"' + (state.loading ? ' disabled' : '') + '>Refresh list</button></div>';
+}
+
+function tileHTML(cls, type, id, name, count) {
+  return '<button class="tile ' + cls + '" type="button" data-act="browse" data-type="' + type + '"' + (id ? ' data-id="' + esc(id) + '"' : '') + '>' +
+    '<span class="tn">' + esc(name) + '</span><span class="tc">' + plural(count, 'product', 'products') + '</span></button>';
+}
+
+function homeHTML() {
+  var all = state.products, unp = 0, out = 0, per = {}, i;
+  for (i = 0; i < all.length; i++) {
+    if (!(Number(all[i].price) > 0)) unp++;
+    if (!all[i].in_stock) out++;
+    per[all[i].category_id] = (per[all[i].category_id] || 0) + 1;
+  }
+  var recent = all.filter(function (p) { return Number(p.price) > 0; })
+    .sort(function (a, b) { return a.updated_at < b.updated_at ? 1 : (a.updated_at > b.updated_at ? -1 : 0); }).slice(0, 5);
+  var html = '';
+  if (recent.length) html += '<h2 class="sec2">Recently changed</h2><ul class="list">' + recent.map(rowHTML).join('') + '</ul>';
+  html += '<h2 class="sec2">Categories</h2><div class="tiles">' + tileHTML('solid', 'all', '', 'All products', all.length);
+  if (unp) html += tileHTML('warn', 'unpriced', '', 'Needs a price', unp);
+  if (out) html += tileHTML('bad', 'out', '', 'Out of stock', out);
+  state.categories.forEach(function (c) { if (per[c.id]) html += tileHTML('', 'cat', c.id, c.name, per[c.id]); });
+  html += '</div>';
+  return html;
+}
+
 function renderList() {
   var box = $('#listbox'); if (!box) return;
-  var count = $('#count');
   var qc = $('#qclear'); if (qc) qc.hidden = !state.q;
 
   if (!state.loadedOnce) {
@@ -773,37 +810,37 @@ function renderList() {
     } else {
       box.innerHTML = '<p class="empty">Loading products...</p>';
     }
-    if (count) count.textContent = '';
     return;
   }
-  var unp = 0;
-  for (var u = 0; u < state.products.length; u++) if (!(Number(state.products[u].price) > 0)) unp++;
-  if (!unp) state.unpricedOnly = false;
-  var note = '';
-  if (unp) {
-    note = state.unpricedOnly
-      ? '<p class="note">Showing only products without a price. <button class="link" type="button" data-act="unp-off">Show all products</button></p>'
-      : '<p class="note">' + unp + (unp === 1 ? ' product has' : ' products have') + ' no price yet. <button class="link" type="button" data-act="unp-on">Show only these</button></p>';
-  }
-  var all = filteredProducts();
-  if (count) {
-    count.textContent = all.length + (all.length === 1 ? ' product' : ' products') + (state.loadedAt ? ', updated ' + fmtTime(state.loadedAt) : '');
-  }
-  if (!all.length) {
-    var msg;
-    if (!state.products.length) msg = 'No products yet. Add a product to get started.';
-    else if (state.q.trim()) msg = 'No products match your search.';
-    else if (state.cat && !state.stock) msg = 'No products in this category.';
-    else if (state.stock && !state.cat) msg = 'No products match this stock status.';
-    else msg = 'No products match your search.';
-    box.innerHTML = note + '<p class="empty">' + msg + '</p>';
+  /* a shortcut that no longer applies goes back to the home screen */
+  var br = state.browse;
+  if (br && br.type === 'cat' && !state.catMap[br.id]) br = state.browse = null;
+  if (br && br.type === 'unpriced' && !state.products.some(function (p) { return !(Number(p.price) > 0); })) br = state.browse = null;
+  if (br && br.type === 'out' && !state.products.some(function (p) { return !p.in_stock; })) br = state.browse = null;
+
+  var updated = state.loadedAt ? ', updated ' + fmtTime(state.loadedAt) : '';
+  var hasQ = !!state.q.trim();
+  if (!hasQ && !br) {
+    if (!state.products.length) {
+      box.innerHTML = metaHTML('0 products' + updated) + '<p class="empty">No products yet. Add a product to get started.</p>';
+      return;
+    }
+    box.innerHTML = metaHTML(plural(state.products.length, 'product', 'products') + updated) + homeHTML();
     return;
   }
-  var shown = all.slice(0, state.limit);
-  var html = note + '<ul class="list">';
-  for (var i = 0; i < shown.length; i++) html += rowHTML(shown[i]);
-  html += '</ul>';
-  if (all.length > shown.length) html += '<button class="btn btn-block more" type="button" data-act="more">Show more products</button>';
+
+  var list = filteredProducts();
+  var title = hasQ ? 'Search results' : br.type === 'all' ? 'All products' : br.type === 'unpriced' ? 'Needs a price' :
+    br.type === 'out' ? 'Out of stock' : (state.catMap[br.id] || 'Category');
+  var head = (br ? '<button class="link back" type="button" data-act="home">Back to categories</button>' : '') + '<h2 class="sec2 first">' + esc(title) + '</h2>';
+  if (!list.length) {
+    var msg = hasQ ? 'No products match your search.' : br && br.type === 'cat' ? 'No products in this category.' : 'No products match this stock status.';
+    box.innerHTML = head + metaHTML('0 products' + updated) + '<p class="empty">' + msg + '</p>';
+    return;
+  }
+  var shown = list.slice(0, state.limit);
+  var html = head + metaHTML(plural(list.length, 'product', 'products') + updated) + '<ul class="list">' + shown.map(rowHTML).join('') + '</ul>';
+  if (list.length > shown.length) html += '<button class="btn btn-block more" type="button" data-act="more">Show more products</button>';
   box.innerHTML = html;
 }
 
@@ -816,7 +853,6 @@ function loadData(opts) {
   if (state.loading && !opts.force) { /* a newer call supersedes the older one */ }
   state.loading = true;
   if (!opts.quiet) { state.fresh = false; state.loadError = ''; renderBanner(); renderList(); }
-  var rf = $('#refresh'); if (rf && !opts.quiet) { rf.disabled = true; }
 
   var ctrl = new AbortController();
   var hit = false;
@@ -831,7 +867,6 @@ function loadData(opts) {
       isExpired(err) ? 'Your session has expired. Log in again.' :
       'Products could not be loaded. Check your connection and try again.';
     if (isExpired(err)) { state.notice = msg; doLogout(); return; }
-    if (rf) rf.disabled = false;
     if (opts.quiet) return;
     state.loadError = msg;
     renderBanner(); renderList();
@@ -873,10 +908,8 @@ function loadData(opts) {
     rebuildCatMap(); sortProducts();
     state.fresh = true; state.loadedOnce = true; state.loadError = ''; state.loadedAt = Date.now(); state.loading = false;
     saveCache();
-    fillCategoryFilter();
     renderBanner(); renderList();
     if (state.view === 'categories') drawCategories();
-    var rf2 = $('#refresh'); if (rf2) rf2.disabled = false;
   }).catch(fail);
 }
 
@@ -1549,7 +1582,9 @@ function openCategorySheet(id) {
   if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
   var s = openSheet({ title: c ? 'Edit category' : 'Add category', discardMsg: 'Discard your changes?' });
   function afterChange() {
-    sortCategories(); rebuildCatMap(); saveCache(); fillCategoryFilter(); drawCategories(); renderList();
+    sortCategories(); rebuildCatMap(); saveCache();
+    if (state.browse && state.browse.type === 'cat' && !state.catMap[state.browse.id]) state.browse = null;
+    drawCategories(); renderList();
   }
   function draw(msg) {
     s.setTitle(c ? 'Edit category' : 'Add category');
@@ -1610,7 +1645,8 @@ function openCategorySheet(id) {
 ------------------------------------------------------------------- */
 function confirmLogout() {
   var s = openSheet({ title: 'Log out' });
-  s.set('<p>Do you want to log out?</p><div class="actions"><button class="btn" type="button" data-close>Stay logged in</button>' +
+  var who = state.profile && state.profile.full_name ? state.profile.full_name : (state.session && state.session.user ? state.session.user.email : '');
+  s.set((who ? '<p class="hint">Logged in as ' + esc(who) + '</p>' : '') + '<p style="margin-top:8px">Do you want to log out?</p><div class="actions"><button class="btn" type="button" data-close>Stay logged in</button>' +
     '<button class="btn btn-primary" type="button" id="yes">Log out</button></div>', '#yes');
   $('#yes', s.body).onclick = function () { this.disabled = true; closeSheet(false); doLogout(); };
 }

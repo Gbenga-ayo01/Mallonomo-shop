@@ -99,11 +99,23 @@ button,input,select{font:inherit;color:inherit}
 .cat{color:var(--muted);font-size:.875rem;overflow-wrap:anywhere}
 .item-price{text-align:right;flex:none;padding-left:12px;border-left:1.5px solid var(--line)}
 .price{font-size:1.5rem;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.15}
-.stock{font-weight:700;font-size:.875rem;margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:6px}
-.stock::before{content:"";width:9px;height:9px;background:currentColor;display:inline-block}
-.stock.in{color:var(--ok)}
-.stock.outs{color:var(--danger)}
-.item.out .price{color:var(--muted)}
+.price.notset{font-size:1.0625rem;color:var(--warn-ink);line-height:1.3}
+.lowest{color:var(--muted);font-size:.875rem;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+.stockbtn{margin-top:8px;min-height:44px;padding:0 12px;border:1.5px solid var(--line);border-radius:6px;background:#fff;display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:.875rem;cursor:pointer}
+.stockbtn::before{content:"";width:9px;height:9px;background:currentColor;display:inline-block}
+.stockbtn:disabled{opacity:.45;cursor:not-allowed}
+.stockbtn.in{color:var(--ok)}
+.stockbtn.outs{color:var(--danger)}
+.note{background:var(--warn-bg);color:var(--warn-ink);border:1.5px solid #D9B24C;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-weight:600}
+.note .link{color:inherit;padding:2px 0;min-height:44px;display:block}
+.cur{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 16px}
+.mid-price{font-size:1.25rem;font-weight:800;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.changes{list-style:none;margin:12px 0 0;padding:0}
+.changes li{padding:10px 0;border-top:1.5px solid var(--line)}
+.changes li:first-child{border-top:0}
+.changes .what{display:block;color:var(--muted);font-size:.875rem}
+.btn-danger-quiet{border-color:var(--danger);color:var(--danger)}
+.item.out .price:not(.notset){color:var(--muted)}
 .stamp{color:var(--muted);font-size:.8125rem;margin-top:8px}
 .item-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
@@ -147,11 +159,11 @@ var CFG = {
   url: 'https://dfqobqqtohwtibnncbfu.supabase.co',
   key: 'sb_publishable_kEFKJKh3H8eAM_YWMJ2WiA_Me16P_Rd'
 };
-var UNITS = ['Piece','Pack','Roll','Sachet','Tin','Bottle','Jar','Bag','Carton','Litre','Kilogram'];
+var UNITS = ['Piece','Pack','Roll','Sachet','Tin','Bottle','Jar','Bag','Carton','Litre','Kilogram','Tub','Can','Bar'];
 var PAGE = 100;
 var MAX_PRICE = 99999999;
-var CACHE_KEY = 'mpm_cache_v1';
-var PCOLS = 'id,name,barcode,category_id,unit,price,in_stock,updated_at,updated_by';
+var CACHE_KEY = 'mpm_cache_v2';
+var PCOLS = 'id,name,barcode,category_id,unit,price,min_price,in_stock,updated_at,updated_by';
 
 var initialHash = window.location.hash || '';
 
@@ -169,7 +181,7 @@ var sb = window.supabase.createClient(CFG.url, CFG.key, {
 var state = {
   session: null, userId: null, profile: null, recovery: false,
   products: [], categories: [], catMap: {}, names: {},
-  q: '', cat: '', stock: '', limit: PAGE,
+  q: '', cat: '', stock: '', limit: PAGE, unpricedOnly: false,
   fresh: false, loadedAt: null, loadedOnce: false, loadError: '', loadToken: 0, loading: false,
   routeToken: 0, notice: ''
 };
@@ -271,7 +283,7 @@ function loadCache() {
 function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* ignore */ } }
 function resetData() {
   state.products = []; state.categories = []; state.catMap = {}; state.names = {};
-  state.q = ''; state.cat = ''; state.stock = ''; state.limit = PAGE;
+  state.q = ''; state.cat = ''; state.stock = ''; state.limit = PAGE; state.unpricedOnly = false;
   state.fresh = false; state.loadedAt = null; state.loadedOnce = false; state.loadError = ''; state.profile = null;
 }
 
@@ -619,6 +631,9 @@ function renderMain() {
     if (!b || b.disabled) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
     if (act === 'price') openPriceSheet(id);
+    else if (act === 'edit') openEditSheet(id);
+    else if (act === 'unp-on') { state.unpricedOnly = true; state.limit = PAGE; renderList(); }
+    else if (act === 'unp-off') { state.unpricedOnly = false; state.limit = PAGE; renderList(); }
     else if (act === 'stock') openStockSheet(id);
     else if (act === 'more') { state.limit += PAGE; renderList(); }
     else if (act === 'retry') loadData({});
@@ -663,6 +678,7 @@ function filteredProducts() {
     if (state.cat && p.category_id !== state.cat) return false;
     if (state.stock === 'in' && !p.in_stock) return false;
     if (state.stock === 'out' && p.in_stock) return false;
+    if (state.unpricedOnly && Number(p.price) > 0) return false;
     if (terms.length) {
       var hay = (p.name + ' ' + (p.barcode || '')).toLowerCase();
       for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) === -1) return false;
@@ -676,18 +692,23 @@ function rowHTML(p) {
   var who = p.updated_by && state.names[p.updated_by] ? ' by ' + state.names[p.updated_by] : '';
   var dis = state.fresh ? '' : ' disabled';
   var id = esc(p.id), nm = esc(p.name);
+  var priced = Number(p.price) > 0;
+  var priceHTML = priced
+    ? '<p class="price">' + money(p.price) + '</p><p class="lowest">' + (p.min_price != null ? 'Lowest: ' + money(p.min_price) : 'Fixed price') + '</p>'
+    : '<p class="price notset">Price not set</p>';
+  var stockLabel = p.in_stock ? 'In stock' : 'Out of stock';
   return '<li class="item' + (p.in_stock ? '' : ' out') + '">' +
     '<div class="item-top"><div class="item-info"><h3 class="name">' + nm + '</h3>' +
     '<p class="unit">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
     (cat ? '<p class="cat">' + esc(cat) + '</p>' : '') +
     (p.barcode ? '<p class="cat">Barcode ' + esc(p.barcode) + '</p>' : '') + '</div>' +
-    '<div class="item-price"><p class="price">' + money(p.price) + '</p>' +
-    '<p class="stock ' + (p.in_stock ? 'in' : 'outs') + '">' + (p.in_stock ? 'In stock' : 'Out of stock') + '</p></div></div>' +
+    '<div class="item-price">' + priceHTML +
+    '<button class="stockbtn ' + (p.in_stock ? 'in' : 'outs') + '" type="button" data-act="stock" data-id="' + id + '"' + dis +
+    ' aria-label="Update stock status for ' + nm + ', currently ' + stockLabel + '">' + stockLabel + '</button></div></div>' +
     '<p class="stamp">Last updated: ' + esc(fmtDate(p.updated_at)) + esc(who) + '</p>' +
     '<div class="item-actions">' +
-    '<button class="btn btn-primary" type="button" data-act="price" data-id="' + id + '"' + dis + ' aria-label="Edit price for ' + nm + '">Edit price</button>' +
-    '<button class="btn btn-quiet" type="button" data-act="stock" data-id="' + id + '"' + dis + ' aria-label="Update stock status for ' + nm + '">' +
-    (p.in_stock ? 'Mark as out of stock' : 'Mark as in stock') + '</button></div></li>';
+    '<button class="btn btn-primary" type="button" data-act="price" data-id="' + id + '"' + dis + ' aria-label="' + (priced ? 'Edit price' : 'Set price') + ' for ' + nm + '">' + (priced ? 'Edit price' : 'Set price') + '</button>' +
+    '<button class="btn btn-quiet" type="button" data-act="edit" data-id="' + id + '"' + dis + ' aria-label="Edit product ' + nm + '">Edit product</button></div></li>';
 }
 
 function renderList() {
@@ -704,6 +725,15 @@ function renderList() {
     if (count) count.textContent = '';
     return;
   }
+  var unp = 0;
+  for (var u = 0; u < state.products.length; u++) if (!(Number(state.products[u].price) > 0)) unp++;
+  if (!unp) state.unpricedOnly = false;
+  var note = '';
+  if (unp) {
+    note = state.unpricedOnly
+      ? '<p class="note">Showing only products without a price. <button class="link" type="button" data-act="unp-off">Show all products</button></p>'
+      : '<p class="note">' + unp + (unp === 1 ? ' product has' : ' products have') + ' no price yet. <button class="link" type="button" data-act="unp-on">Show only these</button></p>';
+  }
   var all = filteredProducts();
   if (count) {
     count.textContent = all.length + (all.length === 1 ? ' product' : ' products') + (state.loadedAt ? ', updated ' + fmtTime(state.loadedAt) : '');
@@ -715,11 +745,11 @@ function renderList() {
     else if (state.cat && !state.stock) msg = 'No products in this category.';
     else if (state.stock && !state.cat) msg = 'No products match this stock status.';
     else msg = 'No products match your search.';
-    box.innerHTML = '<p class="empty">' + msg + '</p>';
+    box.innerHTML = note + '<p class="empty">' + msg + '</p>';
     return;
   }
   var shown = all.slice(0, state.limit);
-  var html = '<ul class="list">';
+  var html = note + '<ul class="list">';
   for (var i = 0; i < shown.length; i++) html += rowHTML(shown[i]);
   html += '</ul>';
   if (all.length > shown.length) html += '<button class="btn btn-block more" type="button" data-act="more">Show more products</button>';
@@ -812,96 +842,260 @@ function parsePrice(raw, missingMsg) {
 }
 function writeErr(err, fallback) {
   if (!err) return fallback;
+  var m = String(err.message || '');
   if (err.timeout) return 'The request took too long. Check the latest data before retrying.';
   if (isNetwork(err)) return 'No internet connection. Check your connection and try again.';
   if (isExpired(err)) return 'Your session has expired. Log in again.';
   if (err.code === '42501') return 'You do not have permission to perform this action.';
+  if (err.code === '23505') return 'This barcode is already assigned to another product.';
+  if (/min_price_check/.test(m)) return 'The lowest price cannot be higher than the listed price.';
   return fallback;
+}
+function numStr(v) { return v == null ? '' : String(Number(v)); }
+function priceLabel(v) { return Number(v) > 0 ? money(v) : 'Not set'; }
+function lowLabel(v) { return v == null ? 'Fixed price' : money(v); }
+
+function applyRow(row) {
+  var found = false;
+  for (var i = 0; i < state.products.length; i++) if (state.products[i].id === row.id) { state.products[i] = row; found = true; }
+  if (!found) state.products.push(row);
+  sortProducts(); state.loadedAt = Date.now(); saveCache(); renderList();
+}
+function removeLocal(id) {
+  state.products = state.products.filter(function (x) { return x.id !== id; });
+  saveCache(); renderList();
+}
+/* Saves changes only if nobody else changed the product since it was loaded. */
+function patchProduct(p, patch) {
+  return timed(function (sig) {
+    return sb.from('products').update(patch).eq('id', p.id).eq('updated_at', p.updated_at).select(PCOLS).abortSignal(sig);
+  }, 15000).then(function (r) {
+    if (r.error) return { error: r.error };
+    if (r.data && r.data.length) { applyRow(r.data[0]); return { row: r.data[0] }; }
+    return timed(function (sig) {
+      return sb.from('products').select(PCOLS).eq('id', p.id).abortSignal(sig).maybeSingle();
+    }, 15000).then(function (g) {
+      if (g.error) return { error: g.error };
+      if (!g.data) { removeLocal(p.id); return { gone: true }; }
+      applyRow(g.data);
+      return { conflict: true, row: g.data };
+    });
+  });
+}
+function sessionEnded(err) {
+  if (err && isExpired(err)) { closeSheet(false); state.notice = 'Your session has expired. Log in again.'; doLogout(); return true; }
+  return false;
 }
 
 function openPriceSheet(id) {
   var p = byId(id);
   if (!p) { toast('This product could not be found. It may have been removed.', true); return; }
   if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
-  var s = openSheet({ title: 'Edit price', discardMsg: 'Your price change has not been saved. Discard it?' });
-  var typed = '';
+  var s = openSheet({ title: Number(p.price) > 0 ? 'Edit price' : 'Set price', discardMsg: 'Your price change has not been saved. Discard it?' });
+  var vals, base;
+  function reset() {
+    base = { price: Number(p.price) > 0 ? numStr(p.price) : '', min: numStr(p.min_price) };
+    vals = { price: base.price, min: base.min };
+  }
+  reset();
 
   function drawEdit(msg) {
-    s.setTitle('Edit price');
-    s.dirty = function () { var i = $('#np', s.body); return !!(i && i.value.trim()); };
-    s.set('<p class="sheet-name">' + esc(p.name) + '</p>' +
-      '<p class="hint">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
-      '<p class="label" style="margin-top:14px">Current price</p><p class="big-price">' + money(p.price) + '</p>' +
+    s.dirty = function () {
+      var a = $('#np', s.body), b = $('#nm', s.body);
+      return !!(a && b && (a.value.trim() !== base.price || b.value.trim() !== base.min));
+    };
+    s.set('<p class="sheet-name">' + esc(p.name) + '</p><p class="hint">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
+      '<div class="cur"><div><p class="label">Listed price</p><p class="mid-price">' + esc(priceLabel(p.price)) + '</p></div>' +
+      '<div><p class="label">Lowest price</p><p class="mid-price">' + esc(lowLabel(p.min_price)) + '</p></div></div>' +
       (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<form id="pf" novalidate><div class="field"><label for="np">New price (\u20A6)</label>' +
-      '<input class="input" id="np" inputmode="decimal" autocomplete="off" placeholder="Enter new price" aria-describedby="nph npe" value="' + esc(typed) + '">' +
-      '<p class="hint" id="nph">Enter the selling price for the selected unit.</p><p class="err" id="npe" role="alert"></p></div>' +
+      '<form id="pf" novalidate>' +
+      '<div class="field"><label for="np">Listed price (\u20A6)</label>' +
+      '<input class="input" id="np" inputmode="decimal" autocomplete="off" placeholder="Enter listed price" aria-describedby="nph npe" value="' + esc(vals.price) + '">' +
+      '<p class="hint" id="nph">The selling price for the selected unit.</p><p class="err" id="npe" role="alert"></p></div>' +
+      '<div class="field"><label for="nm">Lowest price (\u20A6, optional)</label>' +
+      '<input class="input" id="nm" inputmode="decimal" autocomplete="off" placeholder="Leave empty for a fixed price" aria-describedby="nmh nme" value="' + esc(vals.min) + '">' +
+      '<p class="hint" id="nmh">The least a worker may accept when a customer bargains.</p><p class="err" id="nme" role="alert"></p></div>' +
       '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Review change</button></div></form>', '#np');
     $('#pf', s.body).addEventListener('submit', function (e) {
       e.preventDefault();
-      var inp = $('#np', s.body), er = $('#npe', s.body);
-      typed = inp.value;
-      var r = parsePrice(inp.value, 'Enter the new price.');
-      if (r.err) { er.textContent = r.err; inp.focus(); return; }
-      if (r.value === Number(p.price)) { er.textContent = 'The new price is the same as the current price.'; inp.focus(); return; }
-      drawConfirm(r.value);
+      var np = $('#np', s.body), nm = $('#nm', s.body), npe = $('#npe', s.body), nme = $('#nme', s.body);
+      npe.textContent = ''; nme.textContent = '';
+      vals.price = np.value; vals.min = nm.value;
+      var a = parsePrice(np.value, 'Enter the listed price.');
+      if (a.err) { npe.textContent = a.err; np.focus(); return; }
+      var m = { value: null };
+      if (nm.value.trim()) {
+        m = parsePrice(nm.value, '');
+        if (m.err) { nme.textContent = m.err; nm.focus(); return; }
+        if (m.value > a.value) { nme.textContent = 'The lowest price cannot be higher than the listed price.'; nm.focus(); return; }
+      }
+      var oldMin = p.min_price == null ? null : Number(p.min_price);
+      var chP = a.value !== Number(p.price), chM = m.value !== oldMin;
+      if (!chP && !chM) { npe.textContent = 'You have not changed anything.'; np.focus(); return; }
+      drawConfirm({ price: a.value, min: m.value, chP: chP, chM: chM });
     });
   }
 
-  function drawConfirm(newPrice, msg) {
+  function drawConfirm(ch, msg) {
     s.setTitle('Confirm price change');
     s.dirty = function () { return true; };
     var oldP = Number(p.price);
-    var pct = Math.round(((newPrice - oldP) / oldP) * 100);
-    var big = Math.abs(pct) >= 30;
+    var pct = oldP > 0 ? Math.round(((ch.price - oldP) / oldP) * 100) : 0;
+    var big = ch.chP && oldP > 0 && Math.abs(pct) >= 30;
+    var lines = '';
+    if (ch.chP) lines += '<li><span class="what">Listed price</span>' + esc(priceLabel(p.price)) + ' to <strong>' + money(ch.price) + '</strong></li>';
+    if (ch.chM) lines += '<li><span class="what">Lowest price</span>' + esc(lowLabel(p.min_price)) + ' to <strong>' + esc(lowLabel(ch.min)) + '</strong></li>';
     s.set((msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<p>Change the price of <strong>' + esc(p.name) + '</strong> from <strong>' + money(oldP) + '</strong> to <strong>' + money(newPrice) + '</strong>?</p>' +
-      (big ? '<p class="warnline">This is a ' + (pct > 0 ? 'rise' : 'drop') + ' of ' + Math.abs(pct) + '%. Check the amount before saving.</p>' : '') +
+      '<p>Save these changes to <strong>' + esc(p.name) + '</strong>?</p><ul class="changes">' + lines + '</ul>' +
+      (big ? '<p class="warnline" style="margin-top:12px">The listed price will ' + (pct > 0 ? 'rise' : 'drop') + ' by ' + Math.abs(pct) + '%. Check the amount before saving.</p>' : '') +
       '<div class="actions"><button class="btn" type="button" id="back">Back</button><button class="btn btn-primary" type="button" id="save">Save new price</button></div>', '#save');
-    $('#back', s.body).onclick = function () { typed = String(newPrice); drawEdit(); };
-    $('#save', s.body).onclick = function () { save(newPrice); };
+    $('#back', s.body).onclick = function () { drawEdit(); };
+    $('#save', s.body).onclick = function () { save(ch); };
   }
 
-  function save(newPrice) {
-    var btn = $('#save', s.body), back = $('#back', s.body);
+  function save(ch) {
     if (s.busy) return;
+    var btn = $('#save', s.body), back = $('#back', s.body);
     s.busy = true; btn.disabled = true; back.disabled = true; btn.textContent = 'Saving price...';
-    var oldP = p.price;
-    timed(function (sig) {
-      return sb.from('products').update({ price: newPrice }).eq('id', p.id).eq('price', oldP).select(PCOLS).abortSignal(sig);
-    }, 15000).then(function (r) {
-      if (r.error) {
-        s.busy = false;
-        var m = writeErr(r.error, 'Price could not be updated. No change was confirmed. Try again.');
-        if (isExpired(r.error)) { closeSheet(false); state.notice = m; doLogout(); return; }
-        drawConfirm(newPrice, m); return;
+    var patch = {};
+    if (ch.chP) patch.price = ch.price;
+    if (ch.chM) patch.min_price = ch.min;
+    patchProduct(p, patch).then(function (res) {
+      s.busy = false;
+      if (res.error) {
+        if (sessionEnded(res.error)) return;
+        drawConfirm(ch, writeErr(res.error, 'Price could not be updated. No change was confirmed. Try again.')); return;
       }
-      if (r.data && r.data.length) {
-        var row = r.data[0];
-        for (var i = 0; i < state.products.length; i++) if (state.products[i].id === row.id) state.products[i] = row;
-        state.loadedAt = Date.now(); saveCache(); renderList();
-        s.busy = false; closeSheet();
-        toast('Price updated successfully.');
-        return;
+      if (res.gone) { closeSheet(); toast('This product could not be found. It may have been removed.', true); return; }
+      if (res.conflict) {
+        p = res.row; reset();
+        drawEdit('This price was changed by another worker. Refresh and review the latest price.'); return;
       }
-      /* no row matched: the price changed, or the product is gone */
-      timed(function (sig) { return sb.from('products').select(PCOLS).eq('id', p.id).abortSignal(sig).maybeSingle(); }, 15000).then(function (g) {
-        s.busy = false;
-        if (g.error) { drawConfirm(newPrice, writeErr(g.error, 'Price could not be updated. No change was confirmed. Try again.')); return; }
-        if (!g.data) {
-          state.products = state.products.filter(function (x) { return x.id !== p.id; });
-          saveCache(); renderList(); closeSheet();
-          toast('This product could not be found. It may have been removed.', true);
-          return;
-        }
-        for (var j = 0; j < state.products.length; j++) if (state.products[j].id === g.data.id) state.products[j] = g.data;
-        p = g.data; typed = ''; saveCache(); renderList();
-        drawEdit('This price was changed by another worker. Refresh and review the latest price.');
-      });
+      closeSheet();
+      toast('Price updated successfully.');
     });
   }
 
   drawEdit();
+}
+
+/* ------------------------------------------------------------------
+   Edit product (name, category, unit, barcode, prices, stock)
+------------------------------------------------------------------- */
+function openEditSheet(id) {
+  var p = byId(id);
+  if (!p) { toast('This product could not be found. It may have been removed.', true); return; }
+  if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
+  var s = openSheet({ title: 'Edit product', discardMsg: 'Discard your changes?' });
+  var isOwner = !!(state.profile && state.profile.role === 'owner');
+
+  function opts(list, selected, placeholder) {
+    var h = '<option value="">' + placeholder + '</option>';
+    list.forEach(function (o) { h += '<option value="' + esc(o.v) + '"' + (o.v === selected ? ' selected' : '') + '>' + esc(o.t) + '</option>'; });
+    return h;
+  }
+  function draw(msg) {
+    var catList = state.categories.map(function (c) { return { v: c.id, t: c.name }; });
+    var unitList = UNITS.map(function (u) { return { v: u, t: u }; });
+    s.setTitle('Edit product');
+    s.dirty = function () { var f = $('#ef', s.body); return !!(f && readForm(f).patch && Object.keys(readForm(f).patch).length); };
+    s.set((msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<div id="eerr" class="form-err" role="alert"></div>' +
+      '<form id="ef" novalidate>' +
+      '<div class="field"><label for="e-name">Product name</label><input class="input" id="e-name" name="name" maxlength="120" autocomplete="off" value="' + esc(p.name) + '"></div>' +
+      '<div class="field"><label for="e-bar">Barcode (optional)</label><input class="input" id="e-bar" name="barcode" maxlength="64" autocomplete="off" inputmode="numeric" value="' + esc(p.barcode || '') + '"></div>' +
+      '<div class="field"><label for="e-cat">Category</label><select class="input" id="e-cat" name="category">' + opts(catList, p.category_id, 'Select a category') + '</select></div>' +
+      '<div class="field"><label for="e-unit">Unit</label><select class="input" id="e-unit" name="unit">' + opts(unitList, p.unit, 'Select a unit') + '</select></div>' +
+      '<div class="field"><label for="e-price">Listed price (\u20A6)</label><input class="input" id="e-price" name="price" inputmode="decimal" autocomplete="off" placeholder="Price not set" value="' + esc(Number(p.price) > 0 ? numStr(p.price) : '') + '"></div>' +
+      '<div class="field"><label for="e-min">Lowest price (\u20A6, optional)</label><input class="input" id="e-min" name="minprice" inputmode="decimal" autocomplete="off" placeholder="Leave empty for a fixed price" value="' + esc(numStr(p.min_price)) + '"></div>' +
+      '<div class="field"><label for="e-stock">Stock status</label><select class="input" id="e-stock" name="stock"><option value="in"' + (p.in_stock ? ' selected' : '') + '>In stock</option><option value="out"' + (p.in_stock ? '' : ' selected') + '>Out of stock</option></select></div>' +
+      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="esave">Save changes</button></div></form>' +
+      (isOwner ? '<div class="actions one" style="margin-top:22px"><button class="btn btn-danger-quiet" type="button" id="edel">Delete product</button></div>' : ''), '#e-name');
+    $('#ef', s.body).addEventListener('submit', onSubmit);
+    var d = $('#edel', s.body); if (d) d.onclick = drawDelete;
+  }
+
+  /* Reads the form and works out what changed. Returns { err, field } or { patch }. */
+  function readForm(f) {
+    var name = f.name.value.trim().replace(/\s+/g, ' ');
+    var barcode = f.barcode.value.trim();
+    var priceRaw = f.price.value.trim(), minRaw = f.minprice.value.trim();
+    var patch = {};
+    if (!name) return { err: 'Enter a product name.', field: f.name };
+    if (!f.category.value) return { err: 'Select a category.', field: f.category };
+    if (!f.unit.value) return { err: 'Select a unit.', field: f.unit };
+    var price = Number(p.price);
+    if (priceRaw || Number(p.price) > 0) {
+      var a = parsePrice(priceRaw, 'Enter a valid selling price greater than zero.');
+      if (a.err) return { err: a.err, field: f.price };
+      price = a.value;
+    }
+    var min = null;
+    if (minRaw) {
+      if (!(price > 0)) return { err: 'Enter the listed price before setting a lowest price.', field: f.price };
+      var m = parsePrice(minRaw, '');
+      if (m.err) return { err: m.err, field: f.minprice };
+      if (m.value > price) return { err: 'The lowest price cannot be higher than the listed price.', field: f.minprice };
+      min = m.value;
+    }
+    if (name !== p.name) patch.name = name;
+    if ((barcode || null) !== (p.barcode || null)) patch.barcode = barcode || null;
+    if (f.category.value !== p.category_id) patch.category_id = f.category.value;
+    if (f.unit.value !== p.unit) patch.unit = f.unit.value;
+    if (price !== Number(p.price)) patch.price = price;
+    if (min !== (p.min_price == null ? null : Number(p.min_price))) patch.min_price = min;
+    if ((f.stock.value === 'in') !== !!p.in_stock) patch.in_stock = f.stock.value === 'in';
+    return { patch: patch, name: name, unit: f.unit.value };
+  }
+
+  function onSubmit(e) {
+    e.preventDefault();
+    var f = e.target, box = $('#eerr', s.body); box.textContent = '';
+    var r = readForm(f);
+    if (r.err) { box.textContent = r.err; if (r.field) r.field.focus(); return; }
+    if (!Object.keys(r.patch).length) { box.textContent = 'You have not changed anything.'; return; }
+    var dup = state.products.some(function (x) { return x.id !== p.id && x.name.toLowerCase() === r.name.toLowerCase() && x.unit === r.unit; });
+    if (dup) { box.textContent = 'A product with this name or barcode may already exist. Check the product list.'; f.name.focus(); return; }
+    if (s.busy) return;
+    var btn = $('#esave', s.body);
+    s.busy = true; btn.disabled = true; btn.textContent = 'Saving...';
+    patchProduct(p, r.patch).then(function (res) {
+      s.busy = false;
+      if (res.error) {
+        if (sessionEnded(res.error)) return;
+        btn.disabled = false; btn.textContent = 'Save changes';
+        box.textContent = writeErr(res.error, 'Changes could not be saved. Try again.'); return;
+      }
+      if (res.gone) { closeSheet(); toast('This product could not be found. It may have been removed.', true); return; }
+      if (res.conflict) { p = res.row; draw('This product was changed by another worker. Review the latest details and try again.'); return; }
+      closeSheet();
+      toast('Changes saved.');
+    });
+  }
+
+  function drawDelete(msg) {
+    s.setTitle('Delete product');
+    s.dirty = null;
+    s.set((typeof msg === 'string' && msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<p>Delete <strong>' + esc(p.name) + '</strong>? Its price history will also be deleted. This cannot be undone.</p>' +
+      '<div class="actions"><button class="btn" type="button" id="dback">Cancel</button><button class="btn btn-danger" type="button" id="dgo">Delete product</button></div>', '#dback');
+    $('#dback', s.body).onclick = function () { draw(); };
+    $('#dgo', s.body).onclick = function () {
+      if (s.busy) return;
+      var b = this; s.busy = true; b.disabled = true; b.textContent = 'Deleting...';
+      timed(function (sig) { return sb.from('products').delete().eq('id', p.id).select('id').abortSignal(sig); }, 15000).then(function (r) {
+        s.busy = false;
+        if (r.error || !r.data || !r.data.length) {
+          if (r.error && sessionEnded(r.error)) return;
+          drawDelete(r.error ? writeErr(r.error, 'Product could not be deleted. Try again.') : 'Product could not be deleted. Only the owner can delete products.');
+          return;
+        }
+        removeLocal(p.id); closeSheet(); toast('Product deleted.');
+      });
+    };
+  }
+
+  draw();
 }
 
 /* ------------------------------------------------------------------
@@ -932,9 +1126,7 @@ function openStockSheet(id) {
           'Stock status could not be updated. Refresh the list and try again.';
         return;
       }
-      var row = r.data[0];
-      for (var i = 0; i < state.products.length; i++) if (state.products[i].id === row.id) state.products[i] = row;
-      state.loadedAt = Date.now(); saveCache(); renderList();
+      applyRow(r.data[0]);
       closeSheet();
       toast('Stock status updated.');
     });
@@ -953,7 +1145,7 @@ function openAddSheet() {
   UNITS.forEach(function (u) { unitOpts += '<option value="' + esc(u) + '">' + esc(u) + '</option>'; });
   s.dirty = function () {
     var f = $('#af', s.body); if (!f) return false;
-    return !!(f.name.value.trim() || f.barcode.value.trim() || f.price.value.trim() || f.category.value || f.unit.value);
+    return !!(f.name.value.trim() || f.barcode.value.trim() || f.price.value.trim() || f.minprice.value.trim() || f.category.value || f.unit.value);
   };
   s.set((state.categories.length ? '' : '<div class="form-err" role="alert">No categories available. Contact the owner.</div>') +
     '<div id="aerr" class="form-err" role="alert"></div>' +
@@ -961,7 +1153,8 @@ function openAddSheet() {
     '<div class="field"><label for="a-name">Product name</label><input class="input" id="a-name" name="name" maxlength="120" autocomplete="off" placeholder="Enter product name"></div>' +
     '<div class="field"><label for="a-bar">Barcode (optional)</label><input class="input" id="a-bar" name="barcode" maxlength="64" autocomplete="off" inputmode="numeric" placeholder="Enter barcode"></div>' +
     '<div class="field"><label for="a-cat">Category</label><select class="input" id="a-cat" name="category">' + catOpts + '</select></div>' +
-    '<div class="field"><label for="a-price">Selling price (\u20A6)</label><input class="input" id="a-price" name="price" inputmode="decimal" autocomplete="off" placeholder="Enter selling price"></div>' +
+    '<div class="field"><label for="a-price">Listed price (\u20A6)</label><input class="input" id="a-price" name="price" inputmode="decimal" autocomplete="off" placeholder="Enter listed price"></div>' +
+    '<div class="field"><label for="a-min">Lowest price (\u20A6, optional)</label><input class="input" id="a-min" name="minprice" inputmode="decimal" autocomplete="off" placeholder="Leave empty for a fixed price" aria-describedby="a-minh"><p class="hint" id="a-minh">The least a worker may accept when a customer bargains.</p></div>' +
     '<div class="field"><label for="a-unit">Unit</label><select class="input" id="a-unit" name="unit">' + unitOpts + '</select></div>' +
     '<div class="field"><label for="a-stock">Stock status</label><select class="input" id="a-stock" name="stock"><option value="in">In stock</option><option value="out">Out of stock</option></select></div>' +
     '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="asave">Add product</button></div></form>', '#a-name');
@@ -976,6 +1169,13 @@ function openAddSheet() {
     var pr = parsePrice(f.price.value, 'Enter a valid selling price greater than zero.');
     if (pr.err) { box.textContent = pr.err; f.price.focus(); return; }
     if (!f.unit.value) { box.textContent = 'Select a unit.'; f.unit.focus(); return; }
+    var minV = null;
+    if (f.minprice.value.trim()) {
+      var mr = parsePrice(f.minprice.value, '');
+      if (mr.err) { box.textContent = mr.err; f.minprice.focus(); return; }
+      if (mr.value > pr.value) { box.textContent = 'The lowest price cannot be higher than the listed price.'; f.minprice.focus(); return; }
+      minV = mr.value;
+    }
     var dup = state.products.some(function (x) { return x.name.toLowerCase() === name.toLowerCase() && x.unit === f.unit.value; });
     if (dup) { box.textContent = 'A product with this name or barcode may already exist. Check the product list.'; f.name.focus(); return; }
     var btn = $('#asave', s.body);
@@ -984,7 +1184,7 @@ function openAddSheet() {
     timed(function (sig) {
       return sb.from('products').insert({
         name: name, barcode: barcode || null, category_id: f.category.value, unit: f.unit.value,
-        price: pr.value, in_stock: f.stock.value === 'in'
+        price: pr.value, min_price: minV, in_stock: f.stock.value === 'in'
       }).select(PCOLS).abortSignal(sig);
     }, 15000).then(function (r) {
       s.busy = false;
@@ -996,8 +1196,7 @@ function openAddSheet() {
           writeErr(err, 'Product could not be added. Try again.');
         return;
       }
-      state.products.push(r.data[0]); sortProducts();
-      state.loadedAt = Date.now(); saveCache(); renderList();
+      applyRow(r.data[0]);
       closeSheet();
       toast('Product added successfully.');
     });

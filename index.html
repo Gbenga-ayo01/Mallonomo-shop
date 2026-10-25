@@ -90,13 +90,15 @@ button,input,select{font:inherit;color:inherit}
 .tile:hover{background:#F6F8F7}
 .tile .tn{font-weight:700;line-height:1.25;overflow-wrap:anywhere}
 .tile .tc{color:var(--muted);font-size:.875rem;font-variant-numeric:tabular-nums}
-.tile.solid{background:var(--brand);border-color:var(--brand);color:#fff}
-.tile.solid:hover{background:#0A2D1D}
-.tile.solid .tc{color:#fff;opacity:.85}
-.tile.warn{background:var(--warn-bg);border-color:#D9B24C}
-.tile.warn .tc{color:var(--warn-ink)}
-.tile.bad{border-color:var(--danger)}
-.tile.bad .tn{color:var(--danger)}
+.quick{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+.qbtn{flex:1 1 0;min-width:104px;min-height:56px;padding:8px 10px;border:1.5px solid var(--ink);border-radius:6px;background:var(--surface);color:var(--ink);text-align:left;cursor:pointer;display:flex;flex-direction:column;justify-content:center}
+.qbtn:hover{background:#F6F8F7}
+.qbtn .tn{font-weight:700;font-size:.9375rem;line-height:1.2}
+.qbtn .tc{color:var(--muted);font-size:.875rem;font-variant-numeric:tabular-nums}
+.qbtn.warn{background:var(--warn-bg);border-color:#D9B24C}
+.qbtn.warn .tc{color:var(--warn-ink)}
+.qbtn.bad{border-color:var(--danger)}
+.qbtn.bad .tn{color:var(--danger)}
 .search .input{padding-right:48px}
 .search .clear{position:absolute;right:2px;top:2px;width:44px;height:44px;border:0;background:none;font-size:1.5rem;line-height:1;color:var(--muted);cursor:pointer}
 .input::placeholder{color:#5F6D65;font-size:.9375rem}
@@ -781,6 +783,11 @@ function tileHTML(cls, type, id, name, count) {
     '<span class="tn">' + esc(name) + '</span><span class="tc">' + plural(count, 'product', 'products') + '</span></button>';
 }
 
+function quickHTML(cls, type, name, count) {
+  return '<button class="qbtn ' + cls + '" type="button" data-act="browse" data-type="' + type + '">' +
+    '<span class="tn">' + esc(name) + '</span><span class="tc">' + count + '</span></button>';
+}
+
 function homeHTML() {
   var all = state.products, unp = 0, out = 0, per = {}, i;
   for (i = 0; i < all.length; i++) {
@@ -790,13 +797,14 @@ function homeHTML() {
   }
   var recent = all.filter(function (p) { return Number(p.price) > 0; })
     .sort(function (a, b) { return a.updated_at < b.updated_at ? 1 : (a.updated_at > b.updated_at ? -1 : 0); }).slice(0, 5);
-  var html = '';
-  if (recent.length) html += '<h2 class="sec2">Recently changed</h2><ul class="list">' + recent.map(rowHTML).join('') + '</ul>';
-  html += '<h2 class="sec2">Categories</h2><div class="tiles">' + tileHTML('solid', 'all', '', 'All products', all.length);
-  if (unp) html += tileHTML('warn', 'unpriced', '', 'Needs a price', unp);
-  if (out) html += tileHTML('bad', 'out', '', 'Out of stock', out);
-  state.categories.forEach(function (c) { if (per[c.id]) html += tileHTML('', 'cat', c.id, c.name, per[c.id]); });
+  var html = '<div class="quick">' + quickHTML('', 'all', 'All products', all.length);
+  if (unp) html += quickHTML('warn', 'unpriced', 'Needs a price', unp);
+  if (out) html += quickHTML('bad', 'out', 'Out of stock', out);
   html += '</div>';
+  if (recent.length) html += '<h2 class="sec2">Recently changed</h2><ul class="list">' + recent.map(rowHTML).join('') + '</ul>';
+  var tiles = '';
+  state.categories.forEach(function (c) { if (per[c.id]) tiles += tileHTML('', 'cat', c.id, c.name, per[c.id]); });
+  if (tiles) html += '<h2 class="sec2">Categories</h2><div class="tiles">' + tiles + '</div>';
   return html;
 }
 

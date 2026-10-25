@@ -73,7 +73,7 @@ button,input,select{font:inherit;color:inherit}
 .top .btn{background:transparent;border-color:rgba(255,255,255,.6);color:#fff;min-height:44px}
 .top .btn:hover{background:rgba(255,255,255,.12)}
 .top :focus-visible{outline-color:#fff}
-.wrap{max-width:760px;margin:0 auto;padding:16px 16px 80px}
+.wrap{max-width:760px;margin:0 auto;padding:16px 16px 110px}
 .sec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
 .sec-head h2{font-size:1.375rem;letter-spacing:-.01em}
 .search{position:relative;margin-bottom:10px}
@@ -129,6 +129,18 @@ button,input,select{font:inherit;color:inherit}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .more{margin-top:14px}
 
+/* Bottom navigation */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:1.5px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)}
+.tab{flex:1;min-width:0;min-height:56px;padding:0 4px;border:0;border-top:4px solid transparent;margin-top:-1.5px;background:none;color:var(--muted);font-weight:700;font-size:.8125rem;cursor:pointer}
+.tab[aria-current="page"]{color:var(--accent);border-top-color:var(--accent)}
+.tab:focus-visible{outline-offset:-4px}
+.lead-sm{color:var(--muted);margin:-6px 0 14px}
+.sechead{font-size:.9375rem;color:var(--muted);margin:18px 0 8px}
+.hitem{display:flex;flex-direction:column;padding:14px;border-top:1.5px solid var(--line)}
+.hitem:first-child{border-top:0}
+.hl{display:block;font-variant-numeric:tabular-nums;margin-top:6px}
+.stamp2{display:block;color:var(--muted);font-size:.875rem;margin-top:8px}
+
 /* Sheet */
 .overlay{position:fixed;inset:0;background:rgba(10,20,15,.55);display:flex;align-items:flex-end;justify-content:center;z-index:50}
 .sheet{background:var(--surface);width:100%;max-width:520px;max-height:92vh;max-height:92dvh;overflow:auto;border-radius:12px 12px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom));animation:up .18s ease-out}
@@ -146,7 +158,7 @@ button,input,select{font:inherit;color:inherit}
 @media (prefers-reduced-motion:reduce){.sheet{animation:none}}
 
 /* Toast */
-.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:#fff;padding:13px 18px;border-radius:6px;font-weight:600;z-index:80;max-width:calc(100% - 32px);text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(80px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:#fff;padding:13px 18px;border-radius:6px;font-weight:600;z-index:80;max-width:calc(100% - 32px);text-align:center}
 .toast.bad{background:var(--danger)}
 </style>
 </head>
@@ -191,6 +203,7 @@ var state = {
   products: [], categories: [], catMap: {}, names: {},
   q: '', cat: '', stock: '', limit: PAGE, unpricedOnly: false,
   fresh: false, loadedAt: null, loadedOnce: false, loadError: '', loadToken: 0, loading: false,
+  view: 'products', histProduct: null, workers: [], hist: null,
   routeToken: 0, notice: ''
 };
 var sheet = null;
@@ -293,6 +306,7 @@ function resetData() {
   state.products = []; state.categories = []; state.catMap = {}; state.names = {};
   state.q = ''; state.cat = ''; state.stock = ''; state.limit = PAGE; state.unpricedOnly = false;
   state.fresh = false; state.loadedAt = null; state.loadedOnce = false; state.loadError = ''; state.profile = null;
+  state.view = 'products'; state.histProduct = null; state.workers = []; state.hist = null;
 }
 
 /* ------------------------------------------------------------------
@@ -607,13 +621,56 @@ function doLogout() {
 /* ------------------------------------------------------------------
    Main screen
 ------------------------------------------------------------------- */
+/* ------------------------------------------------------------------
+   Navigation
+------------------------------------------------------------------- */
+function isOwner() { return !!(state.profile && state.profile.role === 'owner'); }
+
 function renderMain() {
   closeSheet(false);
   var name = state.profile && state.profile.full_name ? state.profile.full_name : (state.session && state.session.user ? state.session.user.email : '');
+  var tabs = [['products', 'Products'], ['history', 'Price History']];
+  if (isOwner()) { tabs.push(['workers', 'Workers']); tabs.push(['categories', 'Categories']); }
+  var nav = tabs.map(function (t) { return '<button class="tab" type="button" data-view="' + t[0] + '">' + t[1] + '</button>'; }).join('');
   app.innerHTML =
     '<header class="top"><div class="top-in"><div><div class="brand">Mallonomo Enterprise</div><h1 class="title">Price Manager</h1></div>' +
     '<button class="btn" id="logout" type="button">Log out</button></div>' +
     '<div class="who">Logged in as ' + esc(name) + '</div></header>' +
+    '<div id="view"></div><nav class="tabs" aria-label="Main navigation">' + nav + '</nav>';
+  $('#logout').onclick = confirmLogout;
+  var btns = app.querySelectorAll('.tab');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].onclick = function () {
+      var v = this.getAttribute('data-view');
+      if (v === 'history') state.histProduct = null;
+      showView(v);
+    };
+  }
+  if (loadCache()) state.loadedOnce = true;
+  showView(state.view || 'products');
+  loadData({});
+}
+
+function showView(v) {
+  closeSheet(false);
+  if ((v === 'workers' || v === 'categories') && !isOwner()) v = 'products';
+  state.view = v;
+  var btns = app.querySelectorAll('.tab');
+  for (var i = 0; i < btns.length; i++) {
+    if (btns[i].getAttribute('data-view') === v) btns[i].setAttribute('aria-current', 'page');
+    else btns[i].removeAttribute('aria-current');
+  }
+  var box = $('#view');
+  if (!box) return;
+  if (v === 'products') renderProductsView(box);
+  else if (v === 'history') renderHistoryView(box);
+  else if (v === 'workers') renderWorkersView(box);
+  else renderCategoriesView(box);
+  window.scrollTo(0, 0);
+}
+
+function renderProductsView(box) {
+  box.innerHTML =
     '<main class="wrap">' +
     '<div class="sec-head"><h2>Products</h2><button class="btn btn-primary" id="add" type="button">Add product</button></div>' +
     '<div id="banner"></div>' +
@@ -625,8 +682,6 @@ function renderMain() {
     '<option value="">All stock statuses</option><option value="in">In stock</option><option value="out">Out of stock</option></select></div></div>' +
     '<div class="meta"><span id="count"></span><button class="link" id="refresh" type="button">Refresh list</button></div>' +
     '<div id="listbox"></div></main>';
-
-  $('#logout').onclick = confirmLogout;
   $('#add').onclick = openAddSheet;
   $('#refresh').onclick = function () { loadData({}); };
   var q = $('#q');
@@ -641,18 +696,14 @@ function renderMain() {
     if (act === 'open') openDetailSheet(id);
     else if (act === 'unp-on') { state.unpricedOnly = true; state.limit = PAGE; renderList(); }
     else if (act === 'unp-off') { state.unpricedOnly = false; state.limit = PAGE; renderList(); }
-    else if (act === 'stock') openStockSheet(id);
     else if (act === 'more') { state.limit += PAGE; renderList(); }
     else if (act === 'retry') loadData({});
   });
-
   q.value = state.q; $('#qclear').hidden = !state.q; $('#stk').value = state.stock;
   fillCategoryFilter();
-  var hadCache = loadCache();
-  if (hadCache) { fillCategoryFilter(); state.loadedOnce = true; }
   renderBanner();
   renderList();
-  loadData({});
+  var rf = $('#refresh'); if (rf && state.loading) rf.disabled = true;
 }
 
 function fillCategoryFilter() {
@@ -824,6 +875,7 @@ function loadData(opts) {
     saveCache();
     fillCategoryFilter();
     renderBanner(); renderList();
+    if (state.view === 'categories') drawCategories();
     var rf2 = $('#refresh'); if (rf2) rf2.disabled = false;
   }).catch(fail);
 }
@@ -850,10 +902,12 @@ function openDetailSheet(id) {
     '<div class="stack"><button class="btn btn-primary" type="button" id="d-price"' + dis + '>' + (priced ? 'Edit price' : 'Set price') + '</button>' +
     '<button class="btn" type="button" id="d-edit"' + dis + '>Edit product</button>' +
     '<button class="btn btn-quiet" type="button" id="d-stock"' + dis + '>' + (p.in_stock ? 'Mark as out of stock' : 'Mark as in stock') + '</button>' +
+    '<button class="btn btn-quiet" type="button" id="d-hist">Price history</button>' +
     '<button class="btn btn-quiet" type="button" data-close>Close</button></div>', '#d-price');
   $('#d-price', s.body).onclick = function () { openPriceSheet(id); };
   $('#d-edit', s.body).onclick = function () { openEditSheet(id); };
   $('#d-stock', s.body).onclick = function () { openStockSheet(id); };
+  $('#d-hist', s.body).onclick = function () { state.histProduct = { id: p.id, name: p.name }; showView('history'); };
 }
 
 /* ------------------------------------------------------------------
@@ -1229,6 +1283,326 @@ function openAddSheet() {
       toast('Product added successfully.');
     });
   });
+}
+
+/* ------------------------------------------------------------------
+   Price history
+------------------------------------------------------------------- */
+function numOrNull(v) { return v == null ? null : Number(v); }
+function histLines(h) {
+  var lines = [];
+  if (h.old_price == null) {
+    lines.push('Product created. Listed price <strong>' + money(h.new_price) + '</strong>');
+    if (h.new_min_price != null) lines.push('Lowest price <strong>' + money(h.new_min_price) + '</strong>');
+    return lines;
+  }
+  if (Number(h.old_price) !== Number(h.new_price)) {
+    lines.push('Listed price: ' + esc(priceLabel(h.old_price)) + ' to <strong>' + money(h.new_price) + '</strong>');
+  }
+  if (numOrNull(h.old_min_price) !== numOrNull(h.new_min_price)) {
+    lines.push('Lowest price: ' + esc(lowLabel(h.old_min_price)) + ' to <strong>' + esc(lowLabel(h.new_min_price)) + '</strong>');
+  }
+  return lines;
+}
+function histRow(h) {
+  var pr = h.products || {};
+  var who = h.changed_by && state.names[h.changed_by] ? state.names[h.changed_by] : '';
+  var lines = histLines(h).map(function (l) { return '<span class="hl">' + l + '</span>'; }).join('');
+  return '<li class="hitem"><span class="name">' + esc(pr.name || 'Product') + '</span>' +
+    (pr.unit ? '<span class="cat">Per ' + esc(String(pr.unit).toLowerCase()) + '</span>' : '') + lines +
+    '<span class="stamp2">' + esc(fmtDate(h.changed_at)) + (who ? ' by ' + esc(who) : '') + '</span></li>';
+}
+
+function renderHistoryView(box) {
+  var prod = state.histProduct;
+  state.hist = { rows: [], more: false, loading: false, error: '', term: '', date: '', token: 0 };
+  box.innerHTML = '<main class="wrap"><div class="sec-head"><h2>Price History</h2>' +
+    (prod ? '<button class="btn" id="hback" type="button">Back to products</button>' : '') + '</div>' +
+    (prod ? '<p class="note">Price history for <strong>' + esc(prod.name) + '</strong></p>'
+          : '<div class="search"><label class="sr" for="hq">Search price history</label><input class="input" id="hq" type="search" placeholder="Search by product name" autocomplete="off" autocapitalize="none" spellcheck="false"></div>') +
+    '<div class="field"><label for="hd">Filter by date</label><input class="input" id="hd" type="date"></div>' +
+    '<button class="link" id="hdc" type="button" hidden>Clear date filter</button>' +
+    '<div id="hbox"></div></main>';
+  var back = $('#hback');
+  if (back) back.onclick = function () { state.histProduct = null; showView('products'); };
+  var hq = $('#hq'), timer = null;
+  if (hq) hq.addEventListener('input', function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () { state.hist.term = hq.value; loadHistory(true); }, 350);
+  });
+  $('#hd').addEventListener('change', function () {
+    state.hist.date = this.value; $('#hdc').hidden = !this.value; loadHistory(true);
+  });
+  $('#hdc').onclick = function () { $('#hd').value = ''; state.hist.date = ''; this.hidden = true; loadHistory(true); };
+  $('#hbox').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-act]');
+    if (!b) return;
+    if (b.getAttribute('data-act') === 'hmore') loadHistory(false);
+    else if (b.getAttribute('data-act') === 'hretry') loadHistory(true);
+  });
+  loadHistory(true);
+}
+
+function drawHistory() {
+  var box = $('#hbox'); if (!box) return;
+  var h = state.hist, html = '';
+  if (h.rows.length) {
+    html += '<ul class="list">' + h.rows.map(histRow).join('') + '</ul>';
+    if (h.more && !h.loading) html += '<button class="btn btn-block more" type="button" data-act="hmore">Show more changes</button>';
+  }
+  if (h.loading) html += '<p class="empty">Loading price history...</p>';
+  else if (h.error) html += '<div class="banner bad" role="alert">' + esc(h.error) + '<button class="link" type="button" data-act="hretry">Try again</button></div>';
+  else if (!h.rows.length) html += '<p class="empty">' + (h.term.trim() || h.date ? 'No price changes match your search.' :
+    (state.histProduct ? 'No price changes have been recorded for this product.' : 'No price changes have been recorded yet.')) + '</p>';
+  box.innerHTML = html;
+}
+
+function loadHistory(reset) {
+  var h = state.hist;
+  if (!h || (h.loading && !reset)) return;
+  var token = ++h.token;
+  if (reset) { h.rows = []; h.more = false; }
+  h.loading = true; h.error = '';
+  drawHistory();
+  var size = 50, from = h.rows.length;
+  var term = h.term.replace(/[%_,()*\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  var prod = state.histProduct;
+  timed(function (sig) {
+    var sel = 'id,product_id,old_price,new_price,old_min_price,new_min_price,changed_by,changed_at,products' + (term ? '!inner' : '') + '(name,unit)';
+    var q = sb.from('price_history').select(sel).order('changed_at', { ascending: false }).order('id', { ascending: false }).range(from, from + size - 1);
+    if (prod) q = q.eq('product_id', prod.id);
+    if (term) q = q.ilike('products.name', '%' + term + '%');
+    if (h.date) {
+      var d0 = new Date(h.date + 'T00:00:00'), d1 = new Date(d0.getTime());
+      d1.setDate(d1.getDate() + 1);
+      q = q.gte('changed_at', d0.toISOString()).lt('changed_at', d1.toISOString());
+    }
+    return q.abortSignal(sig);
+  }, 20000).then(function (r) {
+    if (token !== h.token || state.view !== 'history') return;
+    h.loading = false;
+    if (r.error) {
+      if (isExpired(r.error)) { state.notice = 'Your session has expired. Log in again.'; doLogout(); return; }
+      h.error = r.error.timeout ? 'The request took too long. Check your connection and try again.' :
+        isNetwork(r.error) ? 'No internet connection. Check your connection and try again.' : 'Price history could not be loaded. Try again.';
+      drawHistory(); return;
+    }
+    var rows = r.data || [];
+    h.rows = h.rows.concat(rows); h.more = rows.length === size;
+    drawHistory();
+  });
+}
+
+/* ------------------------------------------------------------------
+   Workers (owner only)
+------------------------------------------------------------------- */
+function confirmStep(s, back, messageHtml, goLabel, danger, run) {
+  s.dirty = null;
+  s.set('<p>' + messageHtml + '</p><div id="cerr" class="form-err" role="alert" style="margin-top:12px"></div>' +
+    '<div class="actions"><button class="btn" type="button" id="cno">Cancel</button><button class="btn ' + (danger ? 'btn-danger' : 'btn-primary') + '" type="button" id="cyes">' + esc(goLabel) + '</button></div>', '#cno');
+  $('#cno', s.body).onclick = back;
+  $('#cyes', s.body).onclick = function () {
+    if (s.busy) return;
+    var b = this, old = b.textContent;
+    s.busy = true; b.disabled = true; b.textContent = 'Saving...';
+    run().then(function (msg) {
+      s.busy = false;
+      if (msg) { b.disabled = false; b.textContent = old; var e = $('#cerr', s.body); if (e) e.textContent = msg; }
+    });
+  };
+}
+
+function renderWorkersView(box) {
+  box.innerHTML = '<main class="wrap"><div class="sec-head"><h2>Workers</h2></div>' +
+    '<p class="lead-sm">Manage staff access to Price Manager. New sign-ups appear under No access until you approve them.</p>' +
+    '<div id="wbox"><p class="empty">Loading workers...</p></div></main>';
+  $('#wbox').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-act]');
+    if (!b) return;
+    if (b.getAttribute('data-act') === 'worker') openWorkerSheet(b.getAttribute('data-id'));
+    else if (b.getAttribute('data-act') === 'wretry') loadWorkers();
+  });
+  loadWorkers();
+}
+function loadWorkers() {
+  var wb = $('#wbox'); if (wb && !state.workers.length) wb.innerHTML = '<p class="empty">Loading workers...</p>';
+  timed(function (sig) {
+    return sb.from('profiles').select('id,full_name,email,role,active,created_at').order('created_at', { ascending: false }).abortSignal(sig);
+  }, 15000).then(function (r) {
+    if (state.view !== 'workers') return;
+    var box = $('#wbox'); if (!box) return;
+    if (r.error) {
+      if (isExpired(r.error)) { state.notice = 'Your session has expired. Log in again.'; doLogout(); return; }
+      box.innerHTML = '<div class="banner bad" role="alert">' + (r.error.timeout ? 'The request took too long. Try again.' : isNetwork(r.error) ? 'No internet connection. Check your connection and try again.' : 'Workers could not be loaded. Try again.') +
+        '<button class="link" type="button" data-act="wretry">Try again</button></div>';
+      return;
+    }
+    state.workers = r.data || [];
+    drawWorkers();
+  });
+}
+function workerRow(w) {
+  var you = w.id === state.userId;
+  return '<li class="item"><button class="rowbtn" type="button" data-act="worker" data-id="' + esc(w.id) + '">' +
+    '<span class="item-top"><span class="item-info"><span class="name">' + esc(w.full_name || 'Unnamed') + (you ? ' (you)' : '') + '</span>' +
+    '<span class="cat">' + esc(w.email || 'No email on file') + '</span></span>' +
+    '<span class="item-price"><span class="unit">' + (w.role === 'owner' ? 'Owner' : 'Worker') + '</span>' +
+    '<span class="stock ' + (w.active ? 'in' : 'outs') + '">' + (w.active ? 'Active' : 'No access') + '</span></span></span></button></li>';
+}
+function drawWorkers() {
+  var box = $('#wbox'); if (!box) return;
+  var off = state.workers.filter(function (w) { return !w.active; });
+  var on = state.workers.filter(function (w) { return w.active; });
+  if (!state.workers.length) { box.innerHTML = '<p class="empty">No workers found.</p>'; return; }
+  var html = '';
+  if (off.length) html += '<h3 class="sechead">No access</h3><ul class="list">' + off.map(workerRow).join('') + '</ul>';
+  if (on.length) html += '<h3 class="sechead">Active</h3><ul class="list">' + on.map(workerRow).join('') + '</ul>';
+  box.innerHTML = html;
+}
+function setProfile(w, patch, okMsg) {
+  return timed(function (sig) {
+    return sb.from('profiles').update(patch).eq('id', w.id).select('id,full_name,email,role,active,created_at').abortSignal(sig);
+  }, 15000).then(function (r) {
+    if (r.error) {
+      if (/last active owner/i.test(String(r.error.message || ''))) return 'You cannot remove the last active owner.';
+      return writeErr(r.error, 'This account could not be updated. Try again.');
+    }
+    if (!r.data || !r.data.length) return 'Only the owner can manage workers.';
+    for (var i = 0; i < state.workers.length; i++) if (state.workers[i].id === w.id) state.workers[i] = r.data[0];
+    drawWorkers(); closeSheet(); toast(okMsg);
+    return '';
+  });
+}
+function openWorkerSheet(id) {
+  var w = null;
+  for (var i = 0; i < state.workers.length; i++) if (state.workers[i].id === id) w = state.workers[i];
+  if (!w) return;
+  var self = w.id === state.userId;
+  var s = openSheet({ title: 'Worker details' });
+  var nm = esc(w.full_name || 'this worker');
+  function draw() {
+    s.dirty = null;
+    s.set('<p class="sheet-name">' + esc(w.full_name || 'Unnamed') + '</p><p class="hint">' + esc(w.email || 'No email on file') + '</p>' +
+      '<p style="margin-top:14px"><strong>Role:</strong> ' + (w.role === 'owner' ? 'Owner' : 'Worker') + '</p>' +
+      '<p><strong>Access:</strong> ' + (w.active ? 'Active' : 'No access') + '</p>' +
+      (self ? '<p class="hint" style="margin-top:12px">This is your account. You cannot change your own access or role.</p>' : '') +
+      '<div class="stack">' +
+      (self ? '' : (w.active
+        ? '<button class="btn" type="button" id="w-role">' + (w.role === 'owner' ? 'Make worker' : 'Make owner') + '</button><button class="btn btn-danger-quiet" type="button" id="w-off">Deactivate account</button>'
+        : '<button class="btn btn-primary" type="button" id="w-on">Approve access</button>')) +
+      '<button class="btn btn-quiet" type="button" data-close>Close</button></div>', self ? null : (w.active ? '#w-role' : '#w-on'));
+    var on = $('#w-on', s.body), off = $('#w-off', s.body), role = $('#w-role', s.body);
+    if (on) on.onclick = function () {
+      confirmStep(s, draw, 'Approve access for <strong>' + nm + '</strong>? They will be able to view and change prices.', 'Approve access', false,
+        function () { return setProfile(w, { active: true }, 'Worker access restored.'); });
+    };
+    if (off) off.onclick = function () {
+      confirmStep(s, draw, 'Deactivate access for <strong>' + nm + '</strong>? They will no longer be able to use Price Manager.', 'Deactivate account', true,
+        function () { return setProfile(w, { active: false }, 'Worker access deactivated.'); });
+    };
+    if (role) role.onclick = function () {
+      var toOwner = w.role !== 'owner';
+      confirmStep(s, draw, toOwner
+        ? 'Make <strong>' + nm + '</strong> an owner? Owners can manage workers and categories and delete products.'
+        : 'Make <strong>' + nm + '</strong> a worker? They will lose owner access.', toOwner ? 'Make owner' : 'Make worker', !toOwner,
+        function () { return setProfile(w, { role: toOwner ? 'owner' : 'worker' }, 'Role updated.'); });
+    };
+  }
+  draw();
+}
+
+/* ------------------------------------------------------------------
+   Categories (owner only)
+------------------------------------------------------------------- */
+function catCount(id) {
+  var n = 0;
+  for (var i = 0; i < state.products.length; i++) if (state.products[i].category_id === id) n++;
+  return n;
+}
+function sortCategories() {
+  state.categories.sort(function (a, b) { return (a.sort_order - b.sort_order) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
+}
+function renderCategoriesView(box) {
+  box.innerHTML = '<main class="wrap"><div class="sec-head"><h2>Categories</h2><button class="btn btn-primary" id="cadd" type="button">Add category</button></div>' +
+    '<p class="lead-sm">Manage product categories.</p><div id="cbox"></div></main>';
+  $('#cadd').onclick = function () { openCategorySheet(null); };
+  $('#cbox').addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-act="cat"]');
+    if (b) openCategorySheet(b.getAttribute('data-id'));
+  });
+  drawCategories();
+}
+function drawCategories() {
+  var box = $('#cbox'); if (!box) return;
+  if (!state.loadedOnce) { box.innerHTML = '<p class="empty">Loading...</p>'; return; }
+  if (!state.categories.length) { box.innerHTML = '<p class="empty">No categories found. Add a category to organise products.</p>'; return; }
+  box.innerHTML = '<ul class="list">' + state.categories.map(function (c) {
+    var n = catCount(c.id);
+    return '<li class="item"><button class="rowbtn" type="button" data-act="cat" data-id="' + esc(c.id) + '"><span class="item-top"><span class="item-info"><span class="name">' + esc(c.name) + '</span></span>' +
+      '<span class="item-price"><span class="cat">' + n + (n === 1 ? ' product' : ' products') + '</span></span></span></button></li>';
+  }).join('') + '</ul>';
+}
+function openCategorySheet(id) {
+  var c = null;
+  if (id) for (var i = 0; i < state.categories.length; i++) if (state.categories[i].id === id) c = state.categories[i];
+  if (id && !c) return;
+  if (!state.fresh) { toast('This information may be out of date. Refresh before making changes.', true); return; }
+  var s = openSheet({ title: c ? 'Edit category' : 'Add category', discardMsg: 'Discard your changes?' });
+  function afterChange() {
+    sortCategories(); rebuildCatMap(); saveCache(); fillCategoryFilter(); drawCategories(); renderList();
+  }
+  function draw(msg) {
+    s.setTitle(c ? 'Edit category' : 'Add category');
+    s.dirty = function () { var f = $('#cn', s.body); return !!(f && f.value.trim() !== (c ? c.name : '')); };
+    s.set((msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<div id="cerr" class="form-err" role="alert"></div>' +
+      '<form id="cf" novalidate><div class="field"><label for="cn">Category name</label>' +
+      '<input class="input" id="cn" maxlength="80" autocomplete="off" placeholder="Enter category name" value="' + esc(c ? c.name : '') + '"></div>' +
+      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="csave">Save category</button></div></form>' +
+      (c ? '<div class="actions one" style="margin-top:22px"><button class="btn btn-danger-quiet" type="button" id="cdel">Delete category</button></div>' : ''), '#cn');
+    $('#cf', s.body).addEventListener('submit', onSave);
+    var d = $('#cdel', s.body); if (d) d.onclick = onDelete;
+  }
+  function onSave(e) {
+    e.preventDefault();
+    var box = $('#cerr', s.body); box.textContent = '';
+    var name = $('#cn', s.body).value.trim().replace(/\s+/g, ' ');
+    if (!name) { box.textContent = 'Enter a category name.'; return; }
+    var dup = state.categories.some(function (x) { return (!c || x.id !== c.id) && x.name.toLowerCase() === name.toLowerCase(); });
+    if (dup) { box.textContent = 'This category already exists.'; return; }
+    if (c && name === c.name) { box.textContent = 'You have not changed anything.'; return; }
+    if (s.busy) return;
+    var btn = $('#csave', s.body); s.busy = true; btn.disabled = true; btn.textContent = 'Saving...';
+    var m = 0; state.categories.forEach(function (x) { if (x.sort_order < 99 && x.sort_order > m) m = x.sort_order; });
+    timed(function (sig) {
+      var q = c ? sb.from('categories').update({ name: name }).eq('id', c.id) : sb.from('categories').insert({ name: name, sort_order: m + 1 });
+      return q.select('id,name,sort_order').abortSignal(sig);
+    }, 15000).then(function (r) {
+      s.busy = false;
+      if (r.error || !r.data || !r.data.length) {
+        btn.disabled = false; btn.textContent = 'Save category';
+        box.textContent = r.error ? (r.error.code === '23505' ? 'This category already exists.' : writeErr(r.error, 'Category could not be saved. Try again.')) :
+          'Only the owner can manage categories.';
+        return;
+      }
+      if (c) { for (var i = 0; i < state.categories.length; i++) if (state.categories[i].id === c.id) state.categories[i] = r.data[0]; }
+      else state.categories.push(r.data[0]);
+      afterChange(); closeSheet(); toast('Category saved.');
+    });
+  }
+  function onDelete() {
+    if (catCount(c.id) > 0) { draw('This category contains products. Reassign those products before deleting it.'); return; }
+    confirmStep(s, function () { draw(); }, 'Delete the category <strong>' + esc(c.name) + '</strong>?', 'Delete category', true, function () {
+      return timed(function (sig) { return sb.from('categories').delete().eq('id', c.id).select('id').abortSignal(sig); }, 15000).then(function (r) {
+        if (r.error) return r.error.code === '23503' ? 'This category contains products. Reassign those products before deleting it.' : writeErr(r.error, 'Category could not be deleted. Try again.');
+        if (!r.data || !r.data.length) return 'Only the owner can manage categories.';
+        state.categories = state.categories.filter(function (x) { return x.id !== c.id; });
+        afterChange(); closeSheet(); toast('Category deleted.');
+        return '';
+      });
+    });
+  }
+  draw();
 }
 
 /* ------------------------------------------------------------------

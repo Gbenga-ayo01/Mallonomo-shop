@@ -90,9 +90,16 @@ button,input,select{font:inherit;color:inherit}
 
 /* Product rows */
 .list{list-style:none;margin:0;padding:0;background:var(--surface);border:1.5px solid var(--line);border-radius:8px}
-.item{padding:14px 14px 12px;border-top:1.5px solid var(--line)}
+.item{border-top:1.5px solid var(--line)}
+.rowbtn{display:block;width:100%;text-align:left;background:none;border:0;border-radius:0;padding:14px;color:inherit;cursor:pointer}
+.rowbtn:hover{background:#F6F8F7}
+.rowbtn:active{background:#EBF0ED}
+.rowbtn:focus-visible{outline-offset:-3px}
+.list>.item:first-child .rowbtn{border-radius:6px 6px 0 0}
+.list>.item:last-child .rowbtn{border-radius:0 0 6px 6px}
 .item:first-child{border-top:0}
 .item-top{display:flex;justify-content:space-between;gap:14px}
+.name,.unit,.cat,.price,.lowest{display:block}
 .item-info{min-width:0}
 .name{font-size:1.0625rem;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
 .unit{font-weight:600;margin-top:2px}
@@ -101,11 +108,10 @@ button,input,select{font:inherit;color:inherit}
 .price{font-size:1.5rem;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.15}
 .price.notset{font-size:1.0625rem;color:var(--warn-ink);line-height:1.3}
 .lowest{color:var(--muted);font-size:.875rem;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
-.stockbtn{margin-top:8px;min-height:44px;padding:0 12px;border:1.5px solid var(--line);border-radius:6px;background:#fff;display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:.875rem;cursor:pointer}
-.stockbtn::before{content:"";width:9px;height:9px;background:currentColor;display:inline-block}
-.stockbtn:disabled{opacity:.45;cursor:not-allowed}
-.stockbtn.in{color:var(--ok)}
-.stockbtn.outs{color:var(--danger)}
+.stock{display:flex;align-items:center;justify-content:flex-end;gap:6px;font-weight:700;font-size:.875rem;margin-top:6px}
+.stock::before{content:"";width:9px;height:9px;background:currentColor;display:inline-block}
+.stock.in{color:var(--ok)}
+.stock.outs{color:var(--danger)}
 .note{background:var(--warn-bg);color:var(--warn-ink);border:1.5px solid #D9B24C;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-weight:600}
 .note .link{color:inherit;padding:2px 0;min-height:44px;display:block}
 .cur{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 16px}
@@ -116,8 +122,10 @@ button,input,select{font:inherit;color:inherit}
 .changes .what{display:block;color:var(--muted);font-size:.875rem}
 .btn-danger-quiet{border-color:var(--danger);color:var(--danger)}
 .item.out .price:not(.notset){color:var(--muted)}
-.stamp{color:var(--muted);font-size:.8125rem;margin-top:8px}
-.item-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.stamp{color:var(--muted);font-size:.875rem;margin-top:14px}
+.stack{display:grid;gap:10px;margin-top:18px}
+.facts{margin:0 0 4px}
+.facts p{margin:0}
 .empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .more{margin-top:14px}
 
@@ -630,8 +638,7 @@ function renderMain() {
     var b = e.target.closest && e.target.closest('[data-act]');
     if (!b || b.disabled) return;
     var act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
-    if (act === 'price') openPriceSheet(id);
-    else if (act === 'edit') openEditSheet(id);
+    if (act === 'open') openDetailSheet(id);
     else if (act === 'unp-on') { state.unpricedOnly = true; state.limit = PAGE; renderList(); }
     else if (act === 'unp-off') { state.unpricedOnly = false; state.limit = PAGE; renderList(); }
     else if (act === 'stock') openStockSheet(id);
@@ -689,26 +696,19 @@ function filteredProducts() {
 
 function rowHTML(p) {
   var cat = state.catMap[p.category_id] || '';
-  var who = p.updated_by && state.names[p.updated_by] ? ' by ' + state.names[p.updated_by] : '';
-  var dis = state.fresh ? '' : ' disabled';
   var id = esc(p.id), nm = esc(p.name);
   var priced = Number(p.price) > 0;
   var priceHTML = priced
-    ? '<p class="price">' + money(p.price) + '</p><p class="lowest">' + (p.min_price != null ? 'Lowest: ' + money(p.min_price) : 'Fixed price') + '</p>'
-    : '<p class="price notset">Price not set</p>';
+    ? '<span class="price">' + money(p.price) + '</span><span class="lowest">' + (p.min_price != null ? 'Lowest: ' + money(p.min_price) : 'Fixed price') + '</span>'
+    : '<span class="price notset">Price not set</span>';
   var stockLabel = p.in_stock ? 'In stock' : 'Out of stock';
+  var spoken = nm + ', ' + (priced ? money(p.price) : 'price not set') + ', ' + stockLabel + '. Open options';
   return '<li class="item' + (p.in_stock ? '' : ' out') + '">' +
-    '<div class="item-top"><div class="item-info"><h3 class="name">' + nm + '</h3>' +
-    '<p class="unit">Per ' + esc(String(p.unit).toLowerCase()) + '</p>' +
-    (cat ? '<p class="cat">' + esc(cat) + '</p>' : '') +
-    (p.barcode ? '<p class="cat">Barcode ' + esc(p.barcode) + '</p>' : '') + '</div>' +
-    '<div class="item-price">' + priceHTML +
-    '<button class="stockbtn ' + (p.in_stock ? 'in' : 'outs') + '" type="button" data-act="stock" data-id="' + id + '"' + dis +
-    ' aria-label="Update stock status for ' + nm + ', currently ' + stockLabel + '">' + stockLabel + '</button></div></div>' +
-    '<p class="stamp">Last updated: ' + esc(fmtDate(p.updated_at)) + esc(who) + '</p>' +
-    '<div class="item-actions">' +
-    '<button class="btn btn-primary" type="button" data-act="price" data-id="' + id + '"' + dis + ' aria-label="' + (priced ? 'Edit price' : 'Set price') + ' for ' + nm + '">' + (priced ? 'Edit price' : 'Set price') + '</button>' +
-    '<button class="btn btn-quiet" type="button" data-act="edit" data-id="' + id + '"' + dis + ' aria-label="Edit product ' + nm + '">Edit product</button></div></li>';
+    '<button class="rowbtn" type="button" data-act="open" data-id="' + id + '" aria-label="' + spoken + '">' +
+    '<span class="item-top"><span class="item-info"><span class="name">' + nm + '</span>' +
+    '<span class="unit">Per ' + esc(String(p.unit).toLowerCase()) + '</span>' +
+    (cat ? '<span class="cat">' + esc(cat) + '</span>' : '') + '</span>' +
+    '<span class="item-price">' + priceHTML + '<span class="stock ' + (p.in_stock ? 'in' : 'outs') + '">' + stockLabel + '</span></span></span></button></li>';
 }
 
 function renderList() {
@@ -826,6 +826,34 @@ function loadData(opts) {
     renderBanner(); renderList();
     var rf2 = $('#refresh'); if (rf2) rf2.disabled = false;
   }).catch(fail);
+}
+
+/* ------------------------------------------------------------------
+   Product details (opens when a row is tapped)
+------------------------------------------------------------------- */
+function openDetailSheet(id) {
+  var p = byId(id);
+  if (!p) { toast('This product could not be found. It may have been removed.', true); return; }
+  var cat = state.catMap[p.category_id] || '';
+  var who = p.updated_by && state.names[p.updated_by] ? ' by ' + state.names[p.updated_by] : '';
+  var priced = Number(p.price) > 0;
+  var dis = state.fresh ? '' : ' disabled';
+  var s = openSheet({ title: 'Product details' });
+  s.set('<div class="facts"><p class="sheet-name">' + esc(p.name) + '</p>' +
+    '<p class="hint">Per ' + esc(String(p.unit).toLowerCase()) + (cat ? ', ' + esc(cat) : '') + '</p>' +
+    (p.barcode ? '<p class="hint">Barcode ' + esc(p.barcode) + '</p>' : '') + '</div>' +
+    '<div class="cur"><div><p class="label">Listed price</p><p class="mid-price">' + esc(priceLabel(p.price)) + '</p></div>' +
+    '<div><p class="label">Lowest price</p><p class="mid-price">' + esc(priced ? lowLabel(p.min_price) : 'Not set') + '</p></div></div>' +
+    '<p><strong>Stock status:</strong> ' + (p.in_stock ? 'In stock' : 'Out of stock') + '</p>' +
+    '<p class="stamp" style="margin-top:8px">Last updated: ' + esc(fmtDate(p.updated_at)) + esc(who) + '</p>' +
+    (state.fresh ? '' : '<p class="warnline" style="margin-top:14px">This information may be out of date. Refresh before making changes.</p>') +
+    '<div class="stack"><button class="btn btn-primary" type="button" id="d-price"' + dis + '>' + (priced ? 'Edit price' : 'Set price') + '</button>' +
+    '<button class="btn" type="button" id="d-edit"' + dis + '>Edit product</button>' +
+    '<button class="btn btn-quiet" type="button" id="d-stock"' + dis + '>' + (p.in_stock ? 'Mark as out of stock' : 'Mark as in stock') + '</button>' +
+    '<button class="btn btn-quiet" type="button" data-close>Close</button></div>', '#d-price');
+  $('#d-price', s.body).onclick = function () { openPriceSheet(id); };
+  $('#d-edit', s.body).onclick = function () { openEditSheet(id); };
+  $('#d-stock', s.body).onclick = function () { openStockSheet(id); };
 }
 
 /* ------------------------------------------------------------------

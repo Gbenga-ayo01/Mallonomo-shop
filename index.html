@@ -6,7 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="theme-color" content="#062B1B">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src https://dfqobqqtohwtibnncbfu.supabase.co; base-uri 'none'; form-action 'self'">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src https://dfqobqqtohwtibnncbfu.supabase.co; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23062B1B'/%3E%3Cpath d='M9 16h14M16 9v14' stroke='%2322C55E' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" type="image/svg+xml">
 <style>
@@ -1207,13 +1209,17 @@ var STORE_DB = {
     return new Promise(function(resolve) {
       if (STORE_DB.db) return resolve(STORE_DB.db);
       if (!window.indexedDB) { return resolve(null); }
-      var req = indexedDB.open('mallonomo_offline_store_v1', 1);
+      var req = indexedDB.open('mallonomo_offline_store_v1', 2);
       req.onupgradeneeded = function(e) {
         var db = e.target.result;
         if (!db.objectStoreNames.contains('records')) {
           var store = db.createObjectStore('records', { keyPath: 'id' });
           store.createIndex('type', 'type', { unique: false });
           store.createIndex('updatedAt', 'updatedAt', { unique: false });
+        }
+        /* v2: queue of changes waiting to be sent to Supabase */
+        if (!db.objectStoreNames.contains('outbox')) {
+          db.createObjectStore('outbox', { keyPath: 'id' });
         }
       };
       req.onsuccess = function(e) {
@@ -1223,20 +1229,102 @@ var STORE_DB = {
       req.onerror = function() { resolve(null); };
     });
   },
+  /* ---- localStorage fallback helpers (only used if IndexedDB is unavailable) ---- */
+  lsList: function() { try { return JSON.parse(localStorage.getItem('mpm_records_offline_v1') || '[]'); } catch (e) { return []; } },
+  lsSetList: function(l) { localStorage.setItem('mpm_records_offline_v1', JSON.stringify(l)); },
+  lsBox: function() { try { return JSON.parse(localStorage.getItem('mpm_records_outbox_v1') || '{}'); } catch (e) { return {}; } },
+  lsSetBox: function(o) { localStorage.setItem('mpm_records_outbox_v1', JSON.stringify(o)); },
+
   getAll: function() {
     return STORE_DB.init().then(function(db) {
       return new Promise(function(resolve) {
-        if (!db) {
-          try {
-            var raw = localStorage.getItem('mpm_records_offline_v1');
-            return resolve(raw ? JSON.parse(raw) : []);
-          } catch(e) { return resolve([]); }
-        }
-        var tx = db.transaction('records', 'readonly');
-        var store = tx.objectStore('records');
-        var req = store.getAll();
+        if (!db) return resolve(STORE_DB.lsList());
+        var req = db.transaction('records', 'readonly').objectStore('records').getAll();
         req.onsuccess = function() { resolve(req.result || []); };
         req.onerror = function() { resolve([]); };
+      });
+    });
+  },
+  getOne: function(id) {
+    return STORE_DB.getAll().then(function(list) {
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    });
+  },
+  outboxAll: function() {
+    return STORE_DB.init().then(function(db) {
+      return new Promise(function(resolve) {
+        if (!db) { var o = STORE_DB.lsBox(); return resolve(Object.keys(o).map(function(k) { return o[k]; })); }
+        var req = db.transaction('outbox', 'readonly').objectStore('outbox').getAll();
+        req.onsuccess = function() { resolve(req.result || []); };
+        req.onerror = function() { resolve([]); };
+      });
+    });
+  },
+  /* Remove a queue entry only if it has not been changed again since we read it */
+  outboxDone: function(id, at) {
+    return STORE_DB.init().then(function(db) {
+      return new Promise(function(resolve) {
+        if (!db) {
+          var o = STORE_DB.lsBox();
+          if (o[id] && o[id].at === at) { delete o[id]; try { STORE_DB.lsSetBox(o); } catch (e) {} }
+          return resolve();
+        }
+        var store = db.transaction('outbox', 'readwrite').objectStore('outbox');
+        var g = store.get(id);
+        g.onsuccess = function() { if (g.result && g.result.at === at) store.delete(id); resolve(); };
+        g.onerror = function() { resolve(); };
+      });
+    });
+  },
+  /* Writes that come FROM the server: never queued for upload */
+  putRaw: function(rec) {
+    return STORE_DB.init().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        if (!db) {
+          try {
+            var list = STORE_DB.lsList(), found = false;
+            for (var i = 0; i < list.length; i++) if (list[i].id === rec.id) { list[i] = rec; found = true; break; }
+            if (!found) list.unshift(rec);
+            STORE_DB.lsSetList(list); return resolve(rec);
+          } catch (e) { return reject(e); }
+        }
+        var req = db.transaction('records', 'readwrite').objectStore('records').put(rec);
+        req.onsuccess = function() { resolve(rec); };
+        req.onerror = function(e) { reject(e); };
+      });
+    });
+  },
+  deleteRaw: function(id) {
+    return STORE_DB.init().then(function(db) {
+      return new Promise(function(resolve) {
+        if (!db) { try { STORE_DB.lsSetList(STORE_DB.lsList().filter(function(r) { return r.id !== id; })); } catch (e) {} return resolve(); }
+        var req = db.transaction('records', 'readwrite').objectStore('records').delete(id);
+        req.onsuccess = function() { resolve(); };
+        req.onerror = function() { resolve(); };
+      });
+    });
+  },
+  /* Queue every existing record once (first sync after this update) */
+  markAllDirty: function() {
+    return STORE_DB.getAll().then(function(list) {
+      return STORE_DB.outboxAll().then(function(box) {
+        var have = {}; box.forEach(function(b) { have[b.id] = 1; });
+        var now = new Date().toISOString();
+        return STORE_DB.init().then(function(db) {
+          return new Promise(function(resolve) {
+            if (!db) {
+              var o = STORE_DB.lsBox();
+              list.forEach(function(r) { if (!have[r.id]) o[r.id] = { id: r.id, op: 'upsert', at: now }; });
+              try { STORE_DB.lsSetBox(o); } catch (e) {}
+              return resolve();
+            }
+            var tx = db.transaction('outbox', 'readwrite'), st = tx.objectStore('outbox');
+            list.forEach(function(r) { if (!have[r.id]) st.put({ id: r.id, op: 'upsert', at: now }); });
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function() { resolve(); };
+          });
+        });
       });
     });
   },
@@ -1245,49 +1333,219 @@ var STORE_DB = {
       rec.updatedAt = new Date().toISOString();
       if (!rec.id) rec.id = 'rec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
       if (!rec.createdAt) rec.createdAt = rec.updatedAt;
+      var q = { id: rec.id, op: 'upsert', at: rec.updatedAt };
       return new Promise(function(resolve, reject) {
         if (!db) {
           try {
-            var raw = localStorage.getItem('mpm_records_offline_v1');
-            var list = raw ? JSON.parse(raw) : [];
-            var found = false;
+            var list = STORE_DB.lsList(), found = false;
             for (var i = 0; i < list.length; i++) {
               if (list[i].id === rec.id) { list[i] = rec; found = true; break; }
             }
             if (!found) list.unshift(rec);
-            localStorage.setItem('mpm_records_offline_v1', JSON.stringify(list));
+            STORE_DB.lsSetList(list);
+            var o = STORE_DB.lsBox(); o[rec.id] = q; STORE_DB.lsSetBox(o);
             return resolve(rec);
           } catch(e) { return reject(e); }
         }
-        var tx = db.transaction('records', 'readwrite');
-        var store = tx.objectStore('records');
-        var req = store.put(rec);
-        req.onsuccess = function() { resolve(rec); };
-        req.onerror = function(e) { reject(e); };
+        var tx = db.transaction(['records', 'outbox'], 'readwrite');
+        tx.objectStore('records').put(rec);
+        tx.objectStore('outbox').put(q);
+        tx.oncomplete = function() { resolve(rec); };
+        tx.onerror = function(e) { reject(e); };
+        tx.onabort = function(e) { reject(e); };
       });
-    });
+    }).then(function(rec) { SYNC.schedule(1200); return rec; });
   },
   delete: function(id) {
     return STORE_DB.init().then(function(db) {
+      var q = { id: id, op: 'delete', at: new Date().toISOString() };
       return new Promise(function(resolve, reject) {
         if (!db) {
           try {
-            var raw = localStorage.getItem('mpm_records_offline_v1');
-            var list = raw ? JSON.parse(raw) : [];
-            list = list.filter(function(r) { return r.id !== id; });
-            localStorage.setItem('mpm_records_offline_v1', JSON.stringify(list));
+            STORE_DB.lsSetList(STORE_DB.lsList().filter(function(r) { return r.id !== id; }));
+            var o = STORE_DB.lsBox(); o[id] = q; STORE_DB.lsSetBox(o);
             return resolve();
           } catch(e) { return reject(e); }
         }
-        var tx = db.transaction('records', 'readwrite');
-        var store = tx.objectStore('records');
-        var req = store.delete(id);
-        req.onsuccess = function() { resolve(); };
-        req.onerror = function(e) { reject(e); };
+        var tx = db.transaction(['records', 'outbox'], 'readwrite');
+        tx.objectStore('records').delete(id);
+        tx.objectStore('outbox').put(q);
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function(e) { reject(e); };
+        tx.onabort = function(e) { reject(e); };
       });
-    });
+    }).then(function() { SYNC.schedule(1200); });
   }
 };
+
+/* ------------------------------------------------------------------
+   Background Sync: local records <-> Supabase table store_records
+   Works offline-first: every change is saved locally and queued,
+   then pushed automatically when a signed-in connection is available.
+------------------------------------------------------------------- */
+var SYNC_OWNER_KEY = 'mpm_rec_sync_owner';
+var SYNC = {
+  running: false, again: false, timer: null, pending: 0, lastAt: null, error: '', blocked: false,
+
+  can: function() {
+    return !!(sb && state.session && state.userId && !state.offlineMode && navigator.onLine !== false);
+  },
+  schedule: function(ms) {
+    clearTimeout(SYNC.timer);
+    SYNC.timer = setTimeout(function() { SYNC.run(); }, ms == null ? 800 : ms);
+    SYNC.refreshPending();
+  },
+  refreshPending: function() {
+    STORE_DB.outboxAll().then(function(b) { SYNC.pending = b.length; SYNC.render(); });
+  },
+  toNum: function(v) { if (v === '' || v == null) return null; var n = Number(v); return isNaN(n) ? null : n; },
+  toRemote: function(r) {
+    var due = null;
+    if (r.dueDate) { var d = new Date(r.dueDate); if (!isNaN(d.getTime())) due = d.toISOString(); }
+    return {
+      id: r.id, owner_id: state.userId, type: r.type,
+      title: r.title || null, contact_name: r.contactName || null, phone: r.phone || null,
+      amount: SYNC.toNum(r.amount), amount_paid: SYNC.toNum(r.amountPaid), balance: SYNC.toNum(r.balance),
+      items: r.items || null, notes: r.notes || null, status: r.status || null,
+      due_date: due, payments: r.payments || null, images: r.images || null,
+      updated_at: r.updatedAt || new Date().toISOString()
+    };
+  },
+  fromRemote: function(x, local) {
+    return {
+      id: x.id, type: x.type, title: x.title || '', contactName: x.contact_name || '', phone: x.phone || '',
+      amount: x.amount, amountPaid: x.amount_paid == null ? 0 : x.amount_paid, balance: x.balance,
+      items: x.items || '', notes: x.notes || '', status: x.status || '',
+      dueDate: x.due_date ? String(x.due_date).slice(0, 10) : '',
+      payments: x.payments || [], images: x.images || [],
+      createdAt: (local && local.createdAt) || x.updated_at,
+      updatedAt: new Date(x.updated_at).toISOString()
+    };
+  },
+
+  push: function() {
+    return STORE_DB.outboxAll().then(function(box) {
+      var failed = 0, firstErr = '';
+      var p = Promise.resolve();
+      box.forEach(function(op) {
+        p = p.then(function() {
+          if (op.op === 'delete') {
+            return timed(function(sig) { return sb.from('store_records').delete().eq('id', op.id).abortSignal(sig); }, 20000).then(function(r) {
+              if (r.error) throw r.error;
+              return STORE_DB.outboxDone(op.id, op.at);
+            });
+          }
+          return STORE_DB.getOne(op.id).then(function(rec) {
+            if (!rec) return STORE_DB.outboxDone(op.id, op.at);
+            return timed(function(sig) { return sb.from('store_records').upsert(SYNC.toRemote(rec), { onConflict: 'id' }).abortSignal(sig); }, 30000).then(function(r) {
+              if (r.error) throw r.error;
+              return STORE_DB.outboxDone(op.id, op.at);
+            });
+          });
+        }).catch(function(err) {
+          if (err && (err.timeout || isNetwork(err) || isExpired(err))) throw err;   /* stop and retry later */
+          failed++; if (!firstErr) firstErr = (err && err.message) || 'Rejected by server';   /* keep queued, continue */
+        });
+      });
+      return p.then(function() { if (failed) { var e = new Error(firstErr); e.partial = true; throw e; } });
+    });
+  },
+
+  pull: function() {
+    var remote = [], from = 0, size = 500;
+    function step() {
+      return timed(function(sig) {
+        return sb.from('store_records').select('*').order('id').range(from, from + size - 1).abortSignal(sig);
+      }, 30000).then(function(r) {
+        if (r.error) throw r.error;
+        remote = remote.concat(r.data || []);
+        if (r.data && r.data.length === size) { from += size; return step(); }
+      });
+    }
+    return step().then(function() {
+      return Promise.all([STORE_DB.getAll(), STORE_DB.outboxAll()]);
+    }).then(function(res) {
+      var local = res[0], queued = {}, byId = {}, remoteIds = {}, changed = false;
+      res[1].forEach(function(b) { queued[b.id] = 1; });
+      local.forEach(function(l) { byId[l.id] = l; });
+      var p = Promise.resolve();
+      remote.forEach(function(x) {
+        remoteIds[x.id] = 1;
+        if (queued[x.id]) return;                                   /* local change not uploaded yet: local wins */
+        var l = byId[x.id];
+        if (!l || Date.parse(x.updated_at) > Date.parse(l.updatedAt || 0)) {
+          changed = true; p = p.then(function() { return STORE_DB.putRaw(SYNC.fromRemote(x, l)); });
+        }
+      });
+      local.forEach(function(l) {
+        if (!remoteIds[l.id] && !queued[l.id]) {                    /* removed on another device */
+          changed = true; p = p.then(function() { return STORE_DB.deleteRaw(l.id); });
+        }
+      });
+      return p.then(function() { return changed; });
+    });
+  },
+
+  run: function() {
+    if (!SYNC.can()) { SYNC.render(); return Promise.resolve(); }
+    if (SYNC.running) { SYNC.again = true; return Promise.resolve(); }
+    var owner = null; try { owner = localStorage.getItem(SYNC_OWNER_KEY); } catch (e) {}
+    if (owner && owner !== state.userId) { SYNC.blocked = true; SYNC.render(); return Promise.resolve(); }
+    SYNC.blocked = false; SYNC.running = true; SYNC.error = ''; SYNC.render();
+
+    var start = Promise.resolve();
+    if (!owner) {
+      start = STORE_DB.markAllDirty().then(function() { try { localStorage.setItem(SYNC_OWNER_KEY, state.userId); } catch (e) {} });
+    }
+    return start.then(SYNC.push).then(SYNC.pull).then(function(changed) {
+      SYNC.lastAt = Date.now(); SYNC.error = '';
+      if (changed && state.view === 'records') loadRecords();
+    }).catch(function(err) {
+      if (err && err.partial) SYNC.error = 'Some entries were rejected by the server (' + err.message + ').';
+      else if (err && isExpired(err)) SYNC.error = 'Sign in again to sync.';
+      else SYNC.error = '';   /* network trouble: stay quiet, will retry */
+      SYNC.netFail = !!(err && !err.partial && (err.timeout || isNetwork(err)));
+    }).then(function() {
+      SYNC.running = false;
+      SYNC.refreshPending();
+      if (SYNC.again) { SYNC.again = false; SYNC.schedule(500); }
+    });
+  },
+
+  render: function() {
+    var el = $('#rec-sync'); if (!el) return;
+    var n = SYNC.pending, msg, cls = 'info', canBtn = false;
+    var plural = n + (n === 1 ? ' change' : ' changes');
+    if (state.offlineMode || !state.session) {
+      if (navigator.onLine === false && state.userId) msg = 'Offline. ' + (n ? plural + ' waiting to sync.' : 'Everything is saved on this device.');
+      else msg = 'Saved on this device only. Sign in to back up and sync to the cloud.';
+    } else if (SYNC.blocked) {
+      msg = 'Records on this device belong to a different account, so cloud sync is paused.'; cls = 'bad';
+    } else if (SYNC.running) {
+      msg = 'Syncing\u2026';
+    } else if (navigator.onLine === false) {
+      msg = 'Offline. ' + (n ? plural + ' will sync when you reconnect.' : 'Everything is saved on this device.');
+    } else if (SYNC.error) {
+      msg = SYNC.error; cls = 'bad'; canBtn = true;
+    } else if (n) {
+      msg = plural + ' waiting to sync.'; canBtn = true;
+    } else {
+      msg = SYNC.lastAt ? 'All synced \u2022 ' + fmtTime(SYNC.lastAt) : 'All changes saved.'; cls = 'ok'; canBtn = !SYNC.lastAt;
+    }
+    el.innerHTML = '<div class="banner ' + cls + '" role="status" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px">' +
+      '<span>' + esc(msg) + '</span>' +
+      (canBtn ? '<button class="link" type="button" id="rec-sync-now">' + ICONS.refresh + ' Sync now</button>' : '') + '</div>';
+    var b = $('#rec-sync-now'); if (b) b.onclick = function() { SYNC.run(); };
+  }
+};
+
+window.addEventListener('online', function() {
+  SYNC.schedule(500);
+  if (!state.offlineMode && state.session && state.profile && !state.fresh && !state.loading && !sheet) loadData({});
+  SYNC.render();
+});
+window.addEventListener('offline', function() { SYNC.render(); });
+setInterval(function() { if (SYNC.can() && !SYNC.running && (SYNC.pending || SYNC.error)) SYNC.run(); }, 60000);
 
 /* Fast Client-Side Image Compressor (Compresses camera/gallery receipt photos to ~100KB) */
 function compressReceiptImage(file, maxDim, quality, cb) {
@@ -1427,7 +1685,7 @@ function toast(msg, bad) {
 function saveCache() {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
-      userId: state.userId, at: state.loadedAt,
+      userId: state.userId, at: state.loadedAt, profile: state.profile,
       products: state.products, categories: state.categories, names: state.names
     }));
   } catch (e) { /* local storage quota */ }
@@ -1442,6 +1700,14 @@ function loadCache() {
     state.loadedAt = c.at || null; rebuildCatMap(); sortProducts();
     return true;
   } catch (e) { return false; }
+}
+/* Who was last signed in on this device (lets the app open with no internet) */
+function cachedIdentity() {
+  try {
+    var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+    if (c && c.userId && c.profile && c.profile.active) return c;
+  } catch (e) { /* ignore */ }
+  return null;
 }
 function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* ignore */ } }
 function resetData() {
@@ -1803,6 +2069,12 @@ function route() {
   var token = ++state.routeToken;
   if (state.recovery) { renderRecovery(); return; }
   if (!sb || !state.session || !state.userId) {
+    var ci = navigator.onLine === false ? cachedIdentity() : null;
+    if (ci) {            /* offline and the saved login can't be refreshed: open from this device's saved data */
+      state.userId = ci.userId; state.profile = ci.profile;
+      renderMain();
+      return;
+    }
     resetData(); clearCache();
     renderAuth('login');
     return;
@@ -1817,6 +2089,10 @@ function route() {
         state.notice = 'Your session has expired. Please sign in again.';
         sb.auth.signOut().then(function () { state.session = null; state.userId = null; route(); });
         return;
+      }
+      if (r.error.timeout || isNetwork(r.error)) {
+        var ci2 = cachedIdentity();
+        if (ci2 && ci2.userId === state.userId) { state.profile = ci2.profile; renderMain(); return; }
       }
       renderRouteError(r.error.timeout ? 'The request took too long. Check your connection.' :
         isNetwork(r.error) ? 'No internet connection. Check your connection.' : 'Something went wrong. Try again.');
@@ -1918,6 +2194,7 @@ function renderMain() {
   if (loadCache()) state.loadedOnce = true;
   showView(state.view || (isOffline ? 'records' : 'products'));
   if (!isOffline && sb) loadData({});
+  SYNC.schedule(1500);
 }
 
 function showView(v) {
@@ -2108,1982 +2385,4 @@ function rowHTML(p) {
 
   var badges = '';
   if (cat) badges += '<span class="badge category">' + esc(cat) + '</span>';
-  if (p.barcode) badges += '<span class="badge barcode">' + ICONS.barcode + ' ' + esc(p.barcode) + '</span>';
-
-  return '<li class="item' + (p.in_stock ? '' : ' out') + '">' +
-    '<button class="rowbtn" type="button" data-act="open" data-id="' + id + '" aria-label="' + nm + ', ' + (priced ? money(p.price) : 'Price not set') + '">' +
-    '<div class="item-left">' +
-      (badges ? '<div class="item-badges">' + badges + '</div>' : '') +
-      '<span class="name">' + nm + '</span>' +
-      '<span class="unit-text">Unit: Per ' + esc(String(p.unit).toLowerCase()) + '</span>' +
-    '</div>' +
-    '<div class="item-right">' +
-      priceHTML + stockHTML +
-    '</div>' +
-    '<span class="row-chevron">' + ICONS.chevron + '</span>' +
-    '</button></li>';
-}
-
-function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
-
-function metaHTML(text) {
-  return '<div class="meta"><span>' + esc(text) + '</span>' +
-    '<button class="link" type="button" data-act="refresh"' + (state.loading ? ' disabled' : '') + '>' + ICONS.refresh + ' Refresh List</button></div>';
-}
-
-function homeHTML() {
-  var all = state.products, unp = 0, out = 0, per = {}, i;
-  for (i = 0; i < all.length; i++) {
-    if (!(Number(all[i].price) > 0)) unp++;
-    if (!all[i].in_stock) out++;
-    per[all[i].category_id] = (per[all[i].category_id] || 0) + 1;
-  }
-  var recent = all.filter(function (p) { return Number(p.price) > 0; })
-    .sort(function (a, b) { return a.updated_at < b.updated_at ? 1 : (a.updated_at > b.updated_at ? -1 : 0); }).slice(0, 5);
-
-  var html = '<div class="quick-stats">' +
-    '<div class="stat-card" data-act="browse" data-type="all"><span class="val">' + all.length + '</span><span class="lbl">Total Products</span></div>';
-  if (unp) html += '<div class="stat-card warn" data-act="browse" data-type="unpriced"><span class="val">' + unp + '</span><span class="lbl">Needs Price</span></div>';
-  if (out) html += '<div class="stat-card bad" data-act="browse" data-type="out"><span class="val">' + out + '</span><span class="lbl">Out of Stock</span></div>';
-  html += '</div>';
-
-  if (recent.length) {
-    html += '<h2 class="sec2">Recently Changed Prices</h2><ul class="list">' + recent.map(rowHTML).join('') + '</ul>';
-  }
-
-  var tiles = '';
-  state.categories.forEach(function (c) {
-    if (per[c.id]) {
-      tiles += '<button class="tile" type="button" data-act="browse" data-type="cat" data-id="' + esc(c.id) + '">' +
-        '<div class="tile-top"><span class="tile-icon">' + ICONS.tag + '</span><span class="tc">' + plural(per[c.id], 'product', 'products') + '</span></div>' +
-        '<span class="tn">' + esc(c.name) + '</span></button>';
-    }
-  });
-  if (tiles) html += '<h2 class="sec2">Categories</h2><div class="tiles">' + tiles + '</div>';
-  return html;
-}
-
-function renderList() {
-  var box = $('#listbox'); if (!box) return;
-  var qc = $('#qclear'); if (qc) qc.hidden = !state.q;
-
-  if (!state.loadedOnce && !state.offlineMode) {
-    if (state.loadError) {
-      box.innerHTML = '<div class="banner bad" role="alert">' + esc(state.loadError) + '<button class="link" type="button" data-act="retry">Try again</button></div>';
-    } else {
-      box.innerHTML = '<div class="empty-state">' + ICONS.refresh + '<h3>Loading Catalog...</h3><p>Connecting to database to fetch latest prices.</p></div>';
-    }
-    return;
-  }
-
-  var br = state.browse;
-  if (br && br.type === 'cat' && !state.catMap[br.id]) br = state.browse = null;
-  if (br && br.type === 'unpriced' && !state.products.some(function (p) { return !(Number(p.price) > 0); })) br = state.browse = null;
-  if (br && br.type === 'out' && !state.products.some(function (p) { return !p.in_stock; })) br = state.browse = null;
-
-  var updated = state.loadedAt ? ' &bull; Synced ' + fmtTime(state.loadedAt) : '';
-  var hasQ = !!state.q.trim();
-
-  if (!hasQ && !br) {
-    if (!state.products.length) {
-      box.innerHTML = metaHTML('0 products' + updated) +
-        '<div class="empty-state">' + ICONS.box + '<h3>No Products Found</h3><p>Start by adding your first product to Price Manager.</p><button class="btn btn-primary" onclick="openAddSheet()">' + ICONS.plus + ' Add Product</button></div>';
-      return;
-    }
-    box.innerHTML = metaHTML(plural(state.products.length, 'product', 'products') + updated) + homeHTML();
-    return;
-  }
-
-  var list = filteredProducts();
-  var title = hasQ ? 'Search Results' : br.type === 'all' ? 'All Products' : br.type === 'unpriced' ? 'Needs Price' :
-    br.type === 'out' ? 'Out of Stock' : (state.catMap[br.id] || 'Category');
-
-  var head = (br ? '<button class="link" type="button" data-act="home" style="margin-bottom:8px">&larr; Back to Dashboard</button>' : '') +
-    '<h2 class="sec2 first">' + esc(title) + '</h2>';
-
-  if (!list.length) {
-    var msg = hasQ ? 'No products match your search term.' : br && br.type === 'cat' ? 'No products in this category yet.' : 'No products match this filter.';
-    box.innerHTML = head + metaHTML('0 products' + updated) +
-      '<div class="empty-state">' + ICONS.search + '<h3>No Matches</h3><p>' + esc(msg) + '</p>' +
-      (hasQ ? '<button class="btn btn-quiet" onclick="$(\'#q\').value=\'\';state.q=\'\';renderFilterBar();renderList();">Clear Search</button>' : '') + '</div>';
-    return;
-  }
-
-  var shown = list.slice(0, state.limit);
-  var html = head + metaHTML(plural(list.length, 'product', 'products') + updated) +
-    '<ul class="list">' + shown.map(rowHTML).join('') + '</ul>';
-  if (list.length > shown.length) {
-    html += '<button class="btn btn-block more" style="margin-top:14px" type="button" data-act="more">Show More Products (' + (list.length - shown.length) + ' remaining)</button>';
-  }
-  box.innerHTML = html;
-}
-
-/* ------------------------------------------------------------------
-   Data Loading & Supabase Queries
-------------------------------------------------------------------- */
-function loadData(opts) {
-  if (state.offlineMode || !sb) return;
-  opts = opts || {};
-  var token = ++state.loadToken;
-  state.loading = true;
-  if (!opts.quiet) { state.fresh = false; state.loadError = ''; renderBanner(); }
-
-  var ctrl = new AbortController();
-  var hit = false;
-  var timer = setTimeout(function () { hit = true; ctrl.abort(); }, 30000);
-
-  function fail(err) {
-    clearTimeout(timer);
-    if (token !== state.loadToken) return;
-    state.loading = false;
-    var msg = (hit || (err && err.timeout)) ? 'The request took too long. Check your connection.' :
-      isNetwork(err) ? 'Could not reach server. Showing offline prices.' :
-      isExpired(err) ? 'Your session has expired. Log in again.' :
-      'Products could not be loaded. Try again.';
-    if (isExpired(err)) { state.notice = msg; doLogout(); return; }
-    if (opts.quiet) return;
-    state.loadError = msg;
-    renderBanner(); renderList();
-  }
-
-  function fetchProducts() {
-    var out = [], from = 0, size = 1000;
-    function step() {
-      return sb.from('products').select(PCOLS).order('name').order('id').range(from, from + size - 1).abortSignal(ctrl.signal).then(function (r) {
-        if (r.error) throw r.error;
-        out = out.concat(r.data || []);
-        if (r.data && r.data.length === size) { from += size; return step(); }
-        return out;
-      });
-    }
-    return step();
-  }
-
-  sb.from('profiles').select('id,full_name,role,active').eq('id', state.userId).abortSignal(ctrl.signal).maybeSingle().then(function (pr) {
-    if (pr.error) throw pr.error;
-    if (!pr.data || !pr.data.active) { clearTimeout(timer); if (token === state.loadToken) { state.loading = false; route(); } return null; }
-    state.profile = pr.data;
-    return Promise.all([
-      fetchProducts(),
-      sb.from('categories').select('id,name,sort_order').order('sort_order').order('name').abortSignal(ctrl.signal),
-      sb.rpc('staff_names').abortSignal(ctrl.signal)
-    ]);
-  }).then(function (res) {
-    if (!res) return;
-    clearTimeout(timer);
-    if (token !== state.loadToken) return;
-    var cats = res[1], nms = res[2];
-    if (cats.error) throw cats.error;
-    if (nms.error) throw nms.error;
-    state.products = res[0];
-    state.categories = cats.data || [];
-    state.names = {};
-    (nms.data || []).forEach(function (n) { state.names[n.id] = n.full_name; });
-    rebuildCatMap(); sortProducts();
-    state.fresh = true; state.loadedOnce = true; state.loadError = ''; state.loadedAt = Date.now(); state.loading = false;
-    saveCache();
-    renderFilterBar(); renderBanner(); renderList();
-    if (state.view === 'categories') drawCategories();
-  }).catch(fail);
-}
-
-/* ------------------------------------------------------------------
-   Product Details Sheet
-------------------------------------------------------------------- */
-function openDetailSheet(id) {
-  var p = byId(id);
-  if (!p) { toast('Product could not be found.', true); return; }
-  var cat = state.catMap[p.category_id] || 'Uncategorized';
-  var who = p.updated_by && state.names[p.updated_by] ? ' by ' + state.names[p.updated_by] : '';
-  var priced = Number(p.price) > 0;
-  var dis = (state.fresh || state.offlineMode) ? '' : ' disabled';
-
-  var s = openSheet({ title: 'Product Details' });
-  s.set(
-    '<div class="detail-hero">' +
-      '<div class="item-badges" style="margin-bottom:6px">' +
-        '<span class="badge category">' + esc(cat) + '</span>' +
-        '<span class="badge">' + esc(p.unit) + '</span>' +
-        (p.barcode ? '<span class="badge barcode">' + ICONS.barcode + ' ' + esc(p.barcode) + '</span>' : '') +
-      '</div>' +
-      '<h3 class="name" style="font-size:1.25rem">' + esc(p.name) + '</h3>' +
-      '<div class="detail-prices">' +
-        '<div class="detail-price-box"><div class="lbl">Listed Selling Price</div><div class="amt" style="color:var(--accent)">' + esc(priceLabel(p.price)) + '</div></div>' +
-        '<div class="detail-price-box"><div class="lbl">Lowest Bargain Limit</div><div class="amt">' + esc(priced ? lowLabel(p.min_price) : 'Not set') + '</div></div>' +
-      '</div>' +
-    '</div>' +
-
-    '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line-subtle)">' +
-      '<strong>Stock Status</strong>' +
-      '<span class="stock-pill ' + (p.in_stock ? 'in' : 'out') + '"><span class="stock-dot"></span>' + (p.in_stock ? 'In Stock' : 'Out of Stock') + '</span>' +
-    '</div>' +
-    '<p class="stamp2" style="margin-top:10px">Last modified: ' + esc(fmtDate(p.updated_at)) + esc(who) + '</p>' +
-
-    (state.fresh || state.offlineMode ? '' : '<p class="banner info" style="margin-top:14px">Cached data: Refresh list before editing.</p>') +
-
-    '<div style="display:grid;gap:10px;margin-top:20px">' +
-      '<button class="btn btn-primary" type="button" id="d-price"' + dis + '>' + ICONS.edit + ' ' + (priced ? 'Update Price' : 'Set Price') + '</button>' +
-      '<button class="btn" type="button" id="d-edit"' + dis + '>Edit Product Information</button>' +
-      '<button class="btn btn-quiet" type="button" id="d-stock"' + dis + '>' + (p.in_stock ? 'Mark as Out of Stock' : 'Mark as In Stock') + '</button>' +
-      '<button class="btn btn-quiet" type="button" id="d-hist">' + ICONS.history + ' View Price Audit History</button>' +
-    '</div>', '#d-price');
-
-  $('#d-price', s.body).onclick = function () { openPriceSheet(id); };
-  $('#d-edit', s.body).onclick = function () { openEditSheet(id); };
-  $('#d-stock', s.body).onclick = function () { openStockSheet(id); };
-  $('#d-hist', s.body).onclick = function () { state.histProduct = { id: p.id, name: p.name }; showView('history'); };
-}
-
-/* ------------------------------------------------------------------
-   Price Editing & Smart Calculations
-------------------------------------------------------------------- */
-function parsePrice(raw, missingMsg) {
-  var s = String(raw || '').replace(/[\u20A6,\s]/g, '');
-  if (!s) return { err: missingMsg };
-  if (!/^(\d+(\.\d{1,2})?|\.\d{1,2})$/.test(s)) return { err: 'Enter a valid amount greater than zero.' };
-  var n = Number(s);
-  if (!(n > 0)) return { err: 'Enter a valid amount greater than zero.' };
-  if (n > MAX_PRICE) return { err: 'Amount exceeds allowed maximum limit.' };
-  return { value: Math.round(n * 100) / 100 };
-}
-function writeErr(err, fallback) {
-  if (!err) return fallback;
-  var m = String(err.message || '');
-  if (err.timeout) return 'Request timed out. Please retry.';
-  if (isNetwork(err)) return 'No internet connection. Please retry.';
-  if (isExpired(err)) return 'Session expired. Please log in again.';
-  if (err.code === '42501') return 'Permission denied for this action.';
-  if (err.code === '23505') return 'This barcode is already assigned to another product.';
-  if (/min_price_check/.test(m)) return 'The lowest price cannot be higher than the listed price.';
-  return fallback;
-}
-function numStr(v) { return v == null ? '' : String(Number(v)); }
-function priceLabel(v) { return Number(v) > 0 ? money(v) : 'Not set'; }
-function lowLabel(v) { return v == null ? 'Fixed Price' : money(v); }
-
-function applyRow(row) {
-  var found = false;
-  for (var i = 0; i < state.products.length; i++) {
-    if (state.products[i].id === row.id) { state.products[i] = row; found = true; break; }
-  }
-  if (!found) state.products.push(row);
-  sortProducts(); state.loadedAt = Date.now(); saveCache();
-  renderFilterBar(); renderList();
-}
-function removeLocal(id) {
-  state.products = state.products.filter(function (x) { return x.id !== id; });
-  saveCache(); renderFilterBar(); renderList();
-}
-
-function patchProduct(p, patch) {
-  if (state.offlineMode || !sb) {
-    for (var k in patch) p[k] = patch[k];
-    p.updated_at = new Date().toISOString();
-    applyRow(p);
-    return Promise.resolve({ row: p });
-  }
-  return timed(function (sig) {
-    return sb.from('products').update(patch).eq('id', p.id).eq('updated_at', p.updated_at).select(PCOLS).abortSignal(sig);
-  }, 15000).then(function (r) {
-    if (r.error) return { error: r.error };
-    if (r.data && r.data.length) { applyRow(r.data[0]); return { row: r.data[0] }; }
-    return timed(function (sig) {
-      return sb.from('products').select(PCOLS).eq('id', p.id).abortSignal(sig).maybeSingle();
-    }, 15000).then(function (g) {
-      if (g.error) return { error: g.error };
-      if (!g.data) { removeLocal(p.id); return { gone: true }; }
-      applyRow(g.data);
-      return { conflict: true, row: g.data };
-    });
-  });
-}
-function sessionEnded(err) {
-  if (err && isExpired(err)) { closeSheet(false); state.notice = 'Session expired. Please log in again.'; doLogout(); return true; }
-  return false;
-}
-
-function openPriceSheet(id) {
-  var p = byId(id);
-  if (!p) { toast('Product could not be found.', true); return; }
-  if (!state.fresh && !state.offlineMode) { toast('Please refresh data before making changes.', true); return; }
-
-  var s = openSheet({ title: Number(p.price) > 0 ? 'Update Price' : 'Set Price', discardMsg: 'Discard unsaved price changes?' });
-  var vals, base;
-  function reset() {
-    base = { price: Number(p.price) > 0 ? numStr(p.price) : '', min: numStr(p.min_price) };
-    vals = { price: base.price, min: base.min };
-  }
-  reset();
-
-  function drawEdit(msg) {
-    s.dirty = function () {
-      var a = $('#np', s.body), b = $('#nm', s.body);
-      return !!(a && b && (a.value.trim() !== base.price || b.value.trim() !== base.min));
-    };
-
-    var currentPriceNum = Number(p.price) || 0;
-
-    s.set(
-      '<div class="detail-hero" style="margin-bottom:14px;padding:12px 14px">' +
-        '<div class="name" style="font-size:1.1rem">' + esc(p.name) + '</div>' +
-        '<div class="unit-text">Unit: Per ' + esc(String(p.unit).toLowerCase()) + '</div>' +
-        '<div style="display:flex;gap:16px;margin-top:10px">' +
-          '<div><span class="lbl" style="font-size:0.75rem;color:var(--muted)">Current Listed:</span> <strong>' + esc(priceLabel(p.price)) + '</strong></div>' +
-          '<div><span class="lbl" style="font-size:0.75rem;color:var(--muted)">Current Lowest:</span> <strong>' + esc(lowLabel(p.min_price)) + '</strong></div>' +
-        '</div>' +
-      '</div>' +
-
-      (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-
-      '<form id="pf" novalidate>' +
-      '<div class="field">' +
-        '<label for="np">New Listed Price (\u20A6)</label>' +
-        '<div class="input-wrap"><span class="input-affix">\u20A6</span>' +
-        '<input class="input has-prefix" id="np" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="nph npe" value="' + esc(vals.price) + '"></div>' +
-        '<div class="quick-adj">' +
-          '<button type="button" class="adj-btn" data-pct="5">+5%</button>' +
-          '<button type="button" class="adj-btn" data-pct="10">+10%</button>' +
-          '<button type="button" class="adj-btn" data-pct="20">+20%</button>' +
-          '<button type="button" class="adj-btn" data-add="100">+ \u20A6100</button>' +
-          '<button type="button" class="adj-btn" data-add="500">+ \u20A6500</button>' +
-          '<button type="button" class="adj-btn" data-add="1000">+ \u20A61k</button>' +
-        '</div>' +
-        '<p class="hint" id="nph">Standard customer selling price.</p><p class="err" id="npe" role="alert"></p>' +
-      '</div>' +
-
-      '<div class="field">' +
-        '<label for="nm">Lowest Price / Bargain Limit (\u20A6, optional)</label>' +
-        '<div class="input-wrap"><span class="input-affix">\u20A6</span>' +
-        '<input class="input has-prefix" id="nm" inputmode="decimal" autocomplete="off" placeholder="Leave blank for fixed price" aria-describedby="nmh nme" value="' + esc(vals.min) + '"></div>' +
-        '<div class="quick-adj">' +
-          '<button type="button" class="adj-btn" id="min-clear">Fixed (No Bargain)</button>' +
-          '<button type="button" class="adj-btn" data-min-pct="5">5% Below</button>' +
-          '<button type="button" class="adj-btn" data-min-pct="10">10% Below</button>' +
-          '<button type="button" class="adj-btn" data-min-pct="15">15% Below</button>' +
-        '</div>' +
-        '<p class="hint" id="nmh">The minimum amount staff can accept during customer negotiation.</p><p class="err" id="nme" role="alert"></p>' +
-      '</div>' +
-
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Review & Confirm</button></div>' +
-      '</form>', '#np');
-
-    var npInput = $('#np', s.body);
-    var nmInput = $('#nm', s.body);
-
-    var adjBtns = s.body.querySelectorAll('[data-pct], [data-add]');
-    for (var i = 0; i < adjBtns.length; i++) {
-      adjBtns[i].onclick = function () {
-        var baseP = Number(npInput.value) || currentPriceNum;
-        if (!baseP) return;
-        var pVal = this.getAttribute('data-pct');
-        var aVal = this.getAttribute('data-add');
-        var newV = baseP;
-        if (pVal) newV = Math.round(baseP * (1 + Number(pVal) / 100));
-        else if (aVal) newV = baseP + Number(aVal);
-        npInput.value = newV;
-        npInput.dispatchEvent(new Event('input'));
-      };
-    }
-
-    var minPctBtns = s.body.querySelectorAll('[data-min-pct]');
-    for (var j = 0; j < minPctBtns.length; j++) {
-      minPctBtns[j].onclick = function () {
-        var baseP = Number(npInput.value) || currentPriceNum;
-        if (!baseP) return;
-        var discount = Number(this.getAttribute('data-min-pct')) / 100;
-        nmInput.value = Math.round(baseP * (1 - discount));
-      };
-    }
-    var minClear = $('#min-clear', s.body);
-    if (minClear) minClear.onclick = function () { nmInput.value = ''; };
-
-    $('#pf', s.body).addEventListener('submit', function (e) {
-      e.preventDefault();
-      var np = $('#np', s.body), nm = $('#nm', s.body), npe = $('#npe', s.body), nme = $('#nme', s.body);
-      npe.textContent = ''; nme.textContent = '';
-      vals.price = np.value; vals.min = nm.value;
-
-      var a = parsePrice(np.value, 'Enter the listed selling price.');
-      if (a.err) { npe.textContent = a.err; np.focus(); return; }
-
-      var m = { value: null };
-      if (nm.value.trim()) {
-        m = parsePrice(nm.value, '');
-        if (m.err) { nme.textContent = m.err; nm.focus(); return; }
-        if (m.value > a.value) { nme.textContent = 'Lowest price cannot be greater than listed price.'; nm.focus(); return; }
-      }
-
-      var oldMin = p.min_price == null ? null : Number(p.min_price);
-      var chP = a.value !== Number(p.price), chM = m.value !== oldMin;
-      if (!chP && !chM) { npe.textContent = 'No changes detected.'; np.focus(); return; }
-
-      drawConfirm({ price: a.value, min: m.value, chP: chP, chM: chM });
-    });
-  }
-
-  function drawConfirm(ch, msg) {
-    s.setTitle('Confirm Price Change');
-    s.dirty = function () { return true; };
-    var oldP = Number(p.price);
-    var pct = oldP > 0 ? Math.round(((ch.price - oldP) / oldP) * 100) : 0;
-    var big = ch.chP && oldP > 0 && Math.abs(pct) >= 30;
-
-    var diffHTML = '';
-    if (ch.chP) {
-      var badgeCls = pct > 0 ? 'up' : 'down';
-      var badgeIcon = pct > 0 ? ICONS.trendUp : ICONS.trendDown;
-      diffHTML +=
-        '<div style="background:var(--surface-alt);border:1.5px solid var(--line);border-radius:var(--radius-md);padding:14px;margin-bottom:12px">' +
-          '<div style="font-size:0.8125rem;color:var(--muted);font-weight:600">Listed Selling Price</div>' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">' +
-            '<span style="text-decoration:line-through;color:var(--muted)">' + esc(priceLabel(p.price)) + '</span> &rarr; ' +
-            '<span style="font-size:1.35rem;font-weight:800;color:var(--accent)">' + money(ch.price) + '</span>' +
-          '</div>' +
-          (pct !== 0 ? '<div class="change-pill ' + badgeCls + '">' + badgeIcon + ' ' + (pct > 0 ? '+' : '') + pct + '% Change</div>' : '') +
-        '</div>';
-    }
-    if (ch.chM) {
-      diffHTML +=
-        '<div style="background:var(--surface-alt);border:1.5px solid var(--line);border-radius:var(--radius-md);padding:14px;margin-bottom:12px">' +
-          '<div style="font-size:0.8125rem;color:var(--muted);font-weight:600">Lowest Bargain Price</div>' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">' +
-            '<span style="color:var(--muted)">' + esc(lowLabel(p.min_price)) + '</span> &rarr; ' +
-            '<span style="font-size:1.15rem;font-weight:700">' + esc(lowLabel(ch.min)) + '</span>' +
-          '</div>' +
-        '</div>';
-    }
-
-    s.set(
-      (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<p style="margin-bottom:12px">Apply new price to <strong>' + esc(p.name) + '</strong>?</p>' +
-      diffHTML +
-      (big ? '<div class="banner info" style="margin-top:12px">' + ICONS.shield + ' <strong>Price Jump Alert:</strong> This change is ' + Math.abs(pct) + '%. Please double check the amount before saving.</div>' : '') +
-      '<div class="actions"><button class="btn" type="button" id="back">Back to Edit</button><button class="btn btn-primary" type="button" id="save">Confirm & Save Price</button></div>', '#save');
-
-    $('#back', s.body).onclick = function () { drawEdit(); };
-    $('#save', s.body).onclick = function () { save(ch); };
-  }
-
-  function save(ch) {
-    if (s.busy) return;
-    var btn = $('#save', s.body), back = $('#back', s.body);
-    s.busy = true; btn.disabled = true; back.disabled = true; btn.textContent = 'Saving Price...';
-    var patch = {};
-    if (ch.chP) patch.price = ch.price;
-    if (ch.chM) patch.min_price = ch.min;
-    patchProduct(p, patch).then(function (res) {
-      s.busy = false;
-      if (res.error) {
-        if (sessionEnded(res.error)) return;
-        drawConfirm(ch, writeErr(res.error, 'Could not save price change.')); return;
-      }
-      if (res.gone) { closeSheet(); toast('Product was removed by another user.', true); return; }
-      if (res.conflict) {
-        p = res.row; reset();
-        drawEdit('Another worker updated this product just now. Review latest details.'); return;
-      }
-      closeSheet();
-      toast('Price updated successfully.');
-    });
-  }
-
-  drawEdit();
-}
-
-/* ------------------------------------------------------------------
-   Edit Product Sheet (Owner & Staff)
-------------------------------------------------------------------- */
-function openEditSheet(id) {
-  var p = byId(id);
-  if (!p) { toast('Product could not be found.', true); return; }
-  if (!state.fresh && !state.offlineMode) { toast('Please refresh data before making changes.', true); return; }
-  var s = openSheet({ title: 'Edit Product Details', discardMsg: 'Discard changes?' });
-
-  function opts(list, selected, placeholder) {
-    var h = '<option value="">' + placeholder + '</option>';
-    list.forEach(function (o) { h += '<option value="' + esc(o.v) + '"' + (o.v === selected ? ' selected' : '') + '>' + esc(o.t) + '</option>'; });
-    return h;
-  }
-  function draw(msg) {
-    var catList = state.categories.map(function (c) { return { v: c.id, t: c.name }; });
-    var unitList = UNITS.map(function (u) { return { v: u, t: u }; });
-    s.setTitle('Edit Product Details');
-    s.dirty = function () { var f = $('#ef', s.body); return !!(f && readForm(f).patch && Object.keys(readForm(f).patch).length); };
-
-    s.set(
-      (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<div id="eerr" class="form-err" role="alert"></div>' +
-      '<form id="ef" novalidate>' +
-      '<div class="field"><label for="e-name">Product Name</label><input class="input" id="e-name" name="name" maxlength="120" autocomplete="off" value="' + esc(p.name) + '"></div>' +
-      '<div class="field"><label for="e-bar">Barcode (optional)</label><input class="input" id="e-bar" name="barcode" maxlength="64" autocomplete="off" inputmode="numeric" placeholder="Scan or enter barcode" value="' + esc(p.barcode || '') + '"></div>' +
-      '<div class="field"><label for="e-cat">Category</label><select class="input" id="e-cat" name="category">' + opts(catList, p.category_id, 'Select a category') + '</select></div>' +
-      '<div class="field"><label for="e-unit">Retail Unit</label><select class="input" id="e-unit" name="unit">' + opts(unitList, p.unit, 'Select unit') + '</select></div>' +
-      '<div class="field"><label for="e-price">Listed Selling Price (\u20A6)</label><div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="e-price" name="price" inputmode="decimal" autocomplete="off" placeholder="0.00" value="' + esc(Number(p.price) > 0 ? numStr(p.price) : '') + '"></div></div>' +
-      '<div class="field"><label for="e-min">Lowest Bargain Price (\u20A6, optional)</label><div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="e-min" name="minprice" inputmode="decimal" autocomplete="off" placeholder="Leave blank for fixed" value="' + esc(numStr(p.min_price)) + '"></div></div>' +
-      '<div class="field"><label for="e-stock">Stock Availability</label><select class="input" id="e-stock" name="stock"><option value="in"' + (p.in_stock ? ' selected' : '') + '>In Stock</option><option value="out"' + (p.in_stock ? '' : ' selected') + '>Out of Stock</option></select></div>' +
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="esave">Save Changes</button></div></form>' +
-      (isOwner() ? '<div class="actions one" style="margin-top:22px;border-top:1.5px solid var(--line);padding-top:16px"><button class="btn btn-danger-quiet" type="button" id="edel">Delete Product from Catalog</button></div>' : ''), '#e-name');
-
-    $('#ef', s.body).addEventListener('submit', onSubmit);
-    var d = $('#edel', s.body); if (d) d.onclick = drawDelete;
-  }
-
-  function readForm(f) {
-    var name = f.name.value.trim().replace(/\s+/g, ' ');
-    var barcode = f.barcode.value.trim();
-    var priceRaw = f.price.value.trim(), minRaw = f.minprice.value.trim();
-    var patch = {};
-    if (!name) return { err: 'Enter a product name.', field: f.name };
-    if (!f.category.value) return { err: 'Select a category.', field: f.category };
-    if (!f.unit.value) return { err: 'Select a unit.', field: f.unit };
-
-    var price = Number(p.price);
-    if (priceRaw || Number(p.price) > 0) {
-      var a = parsePrice(priceRaw, 'Enter a valid selling price greater than zero.');
-      if (a.err) return { err: a.err, field: f.price };
-      price = a.value;
-    }
-    var min = null;
-    if (minRaw) {
-      if (!(price > 0)) return { err: 'Enter the listed price before setting a lowest price.', field: f.price };
-      var m = parsePrice(minRaw, '');
-      if (m.err) return { err: m.err, field: f.minprice };
-      if (m.value > price) return { err: 'Lowest price cannot be higher than listed price.', field: f.minprice };
-      min = m.value;
-    }
-    if (name !== p.name) patch.name = name;
-    if ((barcode || null) !== (p.barcode || null)) patch.barcode = barcode || null;
-    if (f.category.value !== p.category_id) patch.category_id = f.category.value;
-    if (f.unit.value !== p.unit) patch.unit = f.unit.value;
-    if (price !== Number(p.price)) patch.price = price;
-    if (min !== (p.min_price == null ? null : Number(p.min_price))) patch.min_price = min;
-    if ((f.stock.value === 'in') !== !!p.in_stock) patch.in_stock = f.stock.value === 'in';
-    return { patch: patch, name: name, unit: f.unit.value };
-  }
-
-  function onSubmit(e) {
-    e.preventDefault();
-    var f = e.target, box = $('#eerr', s.body); box.textContent = '';
-    var r = readForm(f);
-    if (r.err) { box.textContent = r.err; if (r.field) r.field.focus(); return; }
-    if (!Object.keys(r.patch).length) { box.textContent = 'No changes made.'; return; }
-    var dup = state.products.some(function (x) { return x.id !== p.id && x.name.toLowerCase() === r.name.toLowerCase() && x.unit === r.unit; });
-    if (dup) { box.textContent = 'A product with this name and unit already exists in the catalog.'; f.name.focus(); return; }
-
-    if (s.busy) return;
-    var btn = $('#esave', s.body);
-    s.busy = true; btn.disabled = true; btn.textContent = 'Saving...';
-    patchProduct(p, r.patch).then(function (res) {
-      s.busy = false;
-      if (res.error) {
-        if (sessionEnded(res.error)) return;
-        btn.disabled = false; btn.textContent = 'Save Changes';
-        box.textContent = writeErr(res.error, 'Could not save changes.'); return;
-      }
-      if (res.gone) { closeSheet(); toast('Product was removed.', true); return; }
-      if (res.conflict) { p = res.row; draw('Product was updated by another worker. Please review.'); return; }
-      closeSheet();
-      toast('Product details updated.');
-    });
-  }
-
-  function drawDelete(msg) {
-    s.setTitle('Delete Product');
-    s.dirty = null;
-    s.set(
-      (typeof msg === 'string' && msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<div style="text-align:center;padding:10px 0">' +
-        '<div style="color:var(--danger);margin-bottom:8px">' + ICONS.shield + '</div>' +
-        '<p>Are you sure you want to permanently delete <strong>' + esc(p.name) + '</strong>?</p>' +
-        '<p class="hint" style="margin-top:6px">All recorded price audit history for this item will also be removed. This cannot be undone.</p>' +
-      '</div>' +
-      '<div class="actions"><button class="btn" type="button" id="dback">Cancel</button><button class="btn btn-danger" type="button" id="dgo">Yes, Delete Product</button></div>', '#dback');
-
-    $('#dback', s.body).onclick = function () { draw(); };
-    $('#dgo', s.body).onclick = function () {
-      if (s.busy) return;
-      var b = this; s.busy = true; b.disabled = true; b.textContent = 'Deleting...';
-      if (state.offlineMode || !sb) {
-        removeLocal(p.id); closeSheet(); toast('Product deleted.'); return;
-      }
-      timed(function (sig) { return sb.from('products').delete().eq('id', p.id).select('id').abortSignal(sig); }, 15000).then(function (r) {
-        s.busy = false;
-        if (r.error || !r.data || !r.data.length) {
-          if (r.error && sessionEnded(r.error)) return;
-          drawDelete(r.error ? writeErr(r.error, 'Product could not be deleted.') : 'Only store owners can delete products.');
-          return;
-        }
-        removeLocal(p.id); closeSheet(); toast('Product deleted.');
-      });
-    };
-  }
-
-  draw();
-}
-
-/* ------------------------------------------------------------------
-   Update Stock Status Quick Action
-------------------------------------------------------------------- */
-function openStockSheet(id) {
-  var p = byId(id);
-  if (!p) { toast('Product could not be found.', true); return; }
-  if (!state.fresh && !state.offlineMode) { toast('Please refresh before changing stock status.', true); return; }
-  var target = !p.in_stock;
-  var label = target ? 'In Stock' : 'Out of Stock';
-
-  var s = openSheet({ title: 'Update Stock Status' });
-  s.set(
-    '<p>Mark <strong>' + esc(p.name) + '</strong> as <span class="stock-pill ' + (target ? 'in' : 'out') + '"><span class="stock-dot"></span>' + label + '</span>?</p>' +
-    '<div id="serr" class="form-err" role="alert" style="margin-top:14px"></div>' +
-    '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="button" id="go">' +
-    (target ? 'Mark as In Stock' : 'Mark as Out of Stock') + '</button></div>', '#go');
-
-  $('#go', s.body).onclick = function () {
-    if (s.busy) return;
-    var btn = this; s.busy = true; btn.disabled = true; btn.textContent = 'Updating...';
-    $('#serr', s.body).textContent = '';
-    if (state.offlineMode || !sb) {
-      p.in_stock = target; applyRow(p); closeSheet(); toast('Stock status updated.'); return;
-    }
-    timed(function (sig) {
-      return sb.from('products').update({ in_stock: target }).eq('id', p.id).select(PCOLS).abortSignal(sig);
-    }, 15000).then(function (r) {
-      s.busy = false;
-      if (r.error || !r.data || !r.data.length) {
-        btn.disabled = false; btn.textContent = target ? 'Mark as In Stock' : 'Mark as Out of Stock';
-        if (r.error && isExpired(r.error)) { closeSheet(false); state.notice = 'Session expired.'; doLogout(); return; }
-        $('#serr', s.body).textContent = r.error ? writeErr(r.error, 'Stock status could not be updated.') : 'Could not update status. Refresh list.';
-        return;
-      }
-      applyRow(r.data[0]);
-      closeSheet();
-      toast('Stock status updated.');
-    });
-  };
-}
-
-/* ------------------------------------------------------------------
-   Add Product Sheet
-------------------------------------------------------------------- */
-function openAddSheet() {
-  if (!state.fresh && !state.offlineMode) { toast('Please refresh before adding products.', true); return; }
-  var s = openSheet({ title: 'Add New Product', discardMsg: 'Discard this new product?' });
-
-  var catOpts = '<option value="">Select a category</option>';
-  state.categories.forEach(function (c) { catOpts += '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; });
-  var unitOpts = '<option value="">Select unit</option>';
-  UNITS.forEach(function (u) { unitOpts += '<option value="' + esc(u) + '"' + (u === 'Piece' ? ' selected' : '') + '>' + esc(u) + '</option>'; });
-
-  s.dirty = function () {
-    var f = $('#af', s.body); if (!f) return false;
-    return !!(f.name.value.trim() || f.barcode.value.trim() || f.price.value.trim() || f.minprice.value.trim() || f.category.value);
-  };
-
-  s.set(
-    (state.categories.length ? '' : '<div class="banner info" role="alert">No categories yet. Add categories under the Categories tab.</div>') +
-    '<div id="aerr" class="form-err" role="alert"></div>' +
-    '<form id="af" novalidate>' +
-    '<div class="field"><label for="a-name">Product Name</label><input class="input" id="a-name" name="name" maxlength="120" autocomplete="off" placeholder="e.g. Golden Penny Spaghetti 500g"></div>' +
-    '<div class="field"><label for="a-bar">Barcode (optional)</label><input class="input" id="a-bar" name="barcode" maxlength="64" autocomplete="off" inputmode="numeric" placeholder="Scan or enter barcode"></div>' +
-    '<div class="field"><label for="a-cat">Category</label><select class="input" id="a-cat" name="category">' + catOpts + '</select></div>' +
-    '<div class="field"><label for="a-price">Listed Selling Price (\u20A6)</label><div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="a-price" name="price" inputmode="decimal" autocomplete="off" placeholder="0.00"></div></div>' +
-    '<div class="field"><label for="a-min">Lowest Bargain Price (\u20A6, optional)</label><div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="a-min" name="minprice" inputmode="decimal" autocomplete="off" placeholder="Leave empty for fixed price"></div><p class="hint">The absolute lowest price a worker can accept when bargaining.</p></div>' +
-    '<div class="field"><label for="a-unit">Retail Unit</label><select class="input" id="a-unit" name="unit">' + unitOpts + '</select></div>' +
-    '<div class="field"><label for="a-stock">Stock Availability</label><select class="input" id="a-stock" name="stock"><option value="in">In Stock</option><option value="out">Out of Stock</option></select></div>' +
-    '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="asave">Save & Add Product</button></div>' +
-    '</form>', '#a-name');
-
-  var f = $('#af', s.body);
-  f.addEventListener('submit', function (e) {
-    e.preventDefault();
-    var box = $('#aerr', s.body); box.textContent = '';
-    var name = f.name.value.trim().replace(/\s+/g, ' ');
-    var barcode = f.barcode.value.trim();
-    if (!name) { box.textContent = 'Enter product name.'; f.name.focus(); return; }
-    if (!f.category.value) { box.textContent = 'Select a category.'; f.category.focus(); return; }
-
-    var pr = parsePrice(f.price.value, 'Enter valid listed price greater than zero.');
-    if (pr.err) { box.textContent = pr.err; f.price.focus(); return; }
-    if (!f.unit.value) { box.textContent = 'Select retail unit.'; f.unit.focus(); return; }
-
-    var minV = null;
-    if (f.minprice.value.trim()) {
-      var mr = parsePrice(f.minprice.value, '');
-      if (mr.err) { box.textContent = mr.err; f.minprice.focus(); return; }
-      if (mr.value > pr.value) { box.textContent = 'Lowest price cannot be higher than listed price.'; f.minprice.focus(); return; }
-      minV = mr.value;
-    }
-
-    var dup = state.products.some(function (x) { return x.name.toLowerCase() === name.toLowerCase() && x.unit === f.unit.value; });
-    if (dup) { box.textContent = 'A product with this name and unit already exists in the catalog.'; f.name.focus(); return; }
-
-    var btn = $('#asave', s.body);
-    if (s.busy) return;
-    s.busy = true; btn.disabled = true; btn.textContent = 'Adding product...';
-
-    if (state.offlineMode || !sb) {
-      var newP = {
-        id: 'off_' + Date.now(), name: name, barcode: barcode || null, category_id: f.category.value,
-        unit: f.unit.value, price: pr.value, min_price: minV, in_stock: f.stock.value === 'in',
-        updated_at: new Date().toISOString()
-      };
-      applyRow(newP); closeSheet(); toast('Product added (offline).'); return;
-    }
-
-    timed(function (sig) {
-      return sb.from('products').insert({
-        name: name, barcode: barcode || null, category_id: f.category.value, unit: f.unit.value,
-        price: pr.value, min_price: minV, in_stock: f.stock.value === 'in'
-      }).select(PCOLS).abortSignal(sig);
-    }, 15000).then(function (r) {
-      s.busy = false;
-      if (r.error || !r.data || !r.data.length) {
-        btn.disabled = false; btn.textContent = 'Save & Add Product';
-        var err = r.error;
-        if (err && isExpired(err)) { closeSheet(false); state.notice = 'Session expired.'; doLogout(); return; }
-        box.textContent = err && err.code === '23505' ? 'This barcode is already assigned to another product.' : writeErr(err, 'Product could not be added.');
-        return;
-      }
-      applyRow(r.data[0]);
-      closeSheet();
-      toast('Product added to catalog.');
-    });
-  });
-}
-
-/* ------------------------------------------------------------------
-   STORE RECORDS: DEBTORS, GOODS ORDERED & RECEIPT PHOTOS (OFFLINE)
-------------------------------------------------------------------- */
-function renderRecordsView(box) {
-  box.innerHTML =
-    '<main class="wrap">' +
-    '<div class="sec-head">' +
-      '<div><h2>Store Notes & Debtors</h2><p class="hint">Track debtors, goods ordered, and store receipts offline.</p></div>' +
-      '<button class="btn btn-primary" id="rec-add-btn" type="button">' + ICONS.plus + ' New Entry</button>' +
-    '</div>' +
-
-    '<div id="rec-stats" class="quick-stats"></div>' +
-
-    '<div class="searchrow">' +
-      '<div class="search">' +
-        '<span class="search-icon">' + ICONS.search + '</span>' +
-        '<label class="sr" for="rec-q">Search records</label>' +
-        '<input class="input" id="rec-q" type="search" placeholder="Search customer, phone, supplier, or items..." autocomplete="off">' +
-        '<button class="clear" id="rec-qclear" type="button" aria-label="Clear search" hidden>' + ICONS.close + '</button>' +
-      '</div>' +
-      '<button class="btn btn-quiet" id="rec-backup-btn" type="button" title="Backup or restore records">' + ICONS.download + ' Backup</button>' +
-    '</div>' +
-
-    '<div class="filter-pills" id="rec-pills" style="margin-bottom:14px"></div>' +
-
-    '<div id="rec-list"></div>' +
-    '</main>';
-
-  $('#rec-add-btn').onclick = openNewRecordSheet;
-  $('#rec-backup-btn').onclick = openBackupSheet;
-
-  var q = $('#rec-q');
-  q.addEventListener('input', function() {
-    state.recordSearch = q.value;
-    $('#rec-qclear').hidden = !q.value;
-    drawRecords();
-  });
-  $('#rec-qclear').onclick = function() {
-    q.value = ''; state.recordSearch = ''; this.hidden = true; drawRecords(); q.focus();
-  };
-
-  loadRecords();
-}
-
-function loadRecords() {
-  STORE_DB.getAll().then(function(list) {
-    state.records = list || [];
-    drawRecords();
-  });
-}
-
-function filteredRecords() {
-  var terms = (state.recordSearch || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-  var f = state.recordFilter;
-  return state.records.filter(function(r) {
-    if (f !== 'all') {
-      if (f === 'debtor' && r.type !== 'debtor') return false;
-      if (f === 'order' && r.type !== 'order') return false;
-      if (f === 'receipt' && r.type !== 'receipt') return false;
-      if (f === 'note' && r.type !== 'note') return false;
-      if (f === 'unsettled' && (r.status === 'settled' || r.status === 'received')) return false;
-    }
-    if (terms.length) {
-      var hay = (r.title + ' ' + (r.contactName || '') + ' ' + (r.phone || '') + ' ' + (r.items || '') + ' ' + (r.notes || '')).toLowerCase();
-      for (var i = 0; i < terms.length; i++) if (hay.indexOf(terms[i]) === -1) return false;
-    }
-    return true;
-  });
-}
-
-function drawRecords() {
-  var statsBox = $('#rec-stats');
-  var pillsBox = $('#rec-pills');
-  var listBox = $('#rec-list');
-  if (!listBox) return;
-
-  var all = state.records;
-  var totalDebt = 0, totalSettled = 0, pendingOrders = 0, receiptCount = 0;
-  for (var i = 0; i < all.length; i++) {
-    var r = all[i];
-    if (r.type === 'debtor') {
-      var bal = Number(r.balance != null ? r.balance : (Number(r.amount || 0) - Number(r.amountPaid || 0)));
-      if (r.status !== 'settled' && bal > 0) totalDebt += bal;
-      totalSettled += Number(r.amountPaid || 0);
-    } else if (r.type === 'order') {
-      if (r.status !== 'received') pendingOrders++;
-    }
-    if (r.images && r.images.length) receiptCount += r.images.length;
-  }
-
-  if (statsBox) {
-    statsBox.innerHTML =
-      '<div class="stat-card bad" data-f="debtor"><span class="val">' + money(totalDebt) + '</span><span class="lbl">Unpaid Customer Debt</span></div>' +
-      '<div class="stat-card warn" data-f="order"><span class="val">' + pendingOrders + '</span><span class="lbl">Pending Goods Orders</span></div>' +
-      '<div class="stat-card ok"><span class="val">' + money(totalSettled) + '</span><span class="lbl">Settled Collections</span></div>' +
-      '<div class="stat-card" data-f="receipt"><span class="val">' + receiptCount + '</span><span class="lbl">Stored Receipt Photos</span></div>';
-
-    var scs = statsBox.querySelectorAll('.stat-card[data-f]');
-    for (var s = 0; s < scs.length; s++) {
-      scs[s].onclick = function() {
-        state.recordFilter = this.getAttribute('data-f');
-        drawRecords();
-      };
-    }
-  }
-
-  if (pillsBox) {
-    var f = state.recordFilter;
-    pillsBox.innerHTML =
-      '<button type="button" class="pill ' + (f === 'all' ? 'active' : '') + '" data-rf="all">All Records (' + all.length + ')</button>' +
-      '<button type="button" class="pill bad ' + (f === 'debtor' ? 'active' : '') + '" data-rf="debtor">Debtors</button>' +
-      '<button type="button" class="pill warn ' + (f === 'order' ? 'active' : '') + '" data-rf="order">Goods Ordered</button>' +
-      '<button type="button" class="pill ok ' + (f === 'receipt' ? 'active' : '') + '" data-rf="receipt">Receipts & Bills</button>' +
-      '<button type="button" class="pill ' + (f === 'note' ? 'active' : '') + '" data-rf="note">Notes</button>' +
-      '<button type="button" class="pill ' + (f === 'unsettled' ? 'active' : '') + '" data-rf="unsettled">Unsettled Only</button>';
-
-    var pBtns = pillsBox.querySelectorAll('.pill');
-    for (var j = 0; j < pBtns.length; j++) {
-      pBtns[j].onclick = function() {
-        state.recordFilter = this.getAttribute('data-rf');
-        drawRecords();
-      };
-    }
-  }
-
-  var list = filteredRecords();
-  if (!list.length) {
-    listBox.innerHTML =
-      '<div class="empty-state">' + ICONS.ledger +
-      '<h3>No Records Found</h3>' +
-      '<p>' + (state.recordSearch ? 'No records match your search criteria.' : 'Keep track of customers who owe, goods ordered, and paper receipt photos offline.') + '</p>' +
-      '<button class="btn btn-primary" onclick="openNewRecordSheet()">' + ICONS.plus + ' Add First Entry</button>' +
-      '</div>';
-    return;
-  }
-
-  listBox.innerHTML = list.map(recordCardHTML).join('');
-
-  // Bind clicks
-  var cards = listBox.querySelectorAll('.record-card');
-  for (var k = 0; k < cards.length; k++) {
-    (function(card) {
-      var id = card.getAttribute('data-id');
-      var rec = null;
-      for (var x = 0; x < state.records.length; x++) if (state.records[x].id === id) rec = state.records[x];
-      if (!rec) return;
-
-      var payBtn = card.querySelector('[data-pay]');
-      if (payBtn) payBtn.onclick = function() { openPaymentSheet(rec); };
-
-      var editBtn = card.querySelector('[data-edit]');
-      if (editBtn) editBtn.onclick = function() { openEditRecordSheet(rec); };
-
-      var rcvBtn = card.querySelector('[data-receive]');
-      if (rcvBtn) rcvBtn.onclick = function() { markOrderReceived(rec); };
-
-      var delBtn = card.querySelector('[data-del]');
-      if (delBtn) delBtn.onclick = function() { deleteRecord(rec); };
-
-      // Image thumbnails
-      var thumbs = card.querySelectorAll('.receipt-thumb');
-      for (var t = 0; t < thumbs.length; t++) {
-        thumbs[t].onclick = function() {
-          var src = this.getAttribute('src');
-          openLightbox(src, rec.title);
-        };
-      }
-    })(cards[k]);
-  }
-}
-
-function recordCardHTML(r) {
-  var isDebtor = r.type === 'debtor';
-  var isOrder = r.type === 'order';
-  var isReceipt = r.type === 'receipt';
-
-  var typeBadge =
-    isDebtor ? '<span class="record-type-badge debtor">' + ICONS.shield + ' Customer Debt</span>' :
-    isOrder ? '<span class="record-type-badge order">' + ICONS.box + ' Goods Ordered</span>' :
-    isReceipt ? '<span class="record-type-badge receipt">' + ICONS.camera + ' Store Receipt</span>' :
-    '<span class="record-type-badge note">' + ICONS.ledger + ' Store Note</span>';
-
-  var statusBadge = '';
-  if (isDebtor) {
-    var bal = Number(r.balance != null ? r.balance : (Number(r.amount || 0) - Number(r.amountPaid || 0)));
-    var isSettled = r.status === 'settled' || bal <= 0;
-    statusBadge = isSettled
-      ? '<span class="stock-pill in"><span class="stock-dot"></span>Settled</span>'
-      : (Number(r.amountPaid || 0) > 0
-        ? '<span class="stock-pill out" style="background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-border)"><span class="stock-dot"></span>Partially Paid</span>'
-        : '<span class="stock-pill out"><span class="stock-dot"></span>Unpaid Debt</span>');
-  } else if (isOrder) {
-    statusBadge = r.status === 'received'
-      ? '<span class="stock-pill in"><span class="stock-dot"></span>Received</span>'
-      : '<span class="stock-pill out" style="background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-border)"><span class="stock-dot"></span>Pending Delivery</span>';
-  }
-
-  var contactRow = '';
-  if (r.contactName || r.phone) {
-    contactRow = '<div class="record-contact">' +
-      '<span>' + esc(r.contactName || '') + '</span>' +
-      (r.phone ? '<a class="call-link" href="tel:' + esc(r.phone) + '">' + ICONS.phone + ' ' + esc(r.phone) + '</a>' : '') +
-      '</div>';
-  }
-
-  var amountSection = '';
-  if (isDebtor) {
-    var balAmt = Number(r.balance != null ? r.balance : (Number(r.amount || 0) - Number(r.amountPaid || 0)));
-    amountSection =
-      '<div class="debt-amount-box">' +
-        '<div class="debt-amount-col"><div class="lbl">Total Debt</div><div class="amt">' + money(r.amount || 0) + '</div></div>' +
-        '<div class="debt-amount-col ok"><div class="lbl">Paid So Far</div><div class="amt">' + money(r.amountPaid || 0) + '</div></div>' +
-        '<div class="debt-amount-col danger"><div class="lbl">Remaining Balance</div><div class="amt">' + money(balAmt) + '</div></div>' +
-      '</div>';
-  } else if (r.amount) {
-    amountSection =
-      '<div style="margin:8px 0;font-size:1.15rem;font-weight:800;color:var(--ink)">' +
-        '<span style="font-size:0.8rem;color:var(--muted);font-weight:600">Amount: </span>' + money(r.amount) +
-      '</div>';
-  }
-
-  var itemsSection = '';
-  if (r.items) {
-    itemsSection = '<div class="record-items"><strong>Items / Details:</strong>\n' + esc(r.items) + '</div>';
-  }
-
-  var gallery = '';
-  if (r.images && r.images.length) {
-    gallery = '<div class="receipt-gallery">' +
-      r.images.map(function(img) {
-        return '<img class="receipt-thumb" src="' + img.dataUrl + '" alt="Receipt attachment" title="Tap to preview full picture">';
-      }).join('') +
-      '</div>';
-  }
-
-  var dueDateInfo = '';
-  if (r.dueDate) {
-    dueDateInfo = '<span class="stamp2" style="margin-top:2px">' + (isOrder ? 'Expected Delivery: ' : 'Due Date: ') + esc(fmtDate(r.dueDate)) + '</span>';
-  }
-
-  return '<div class="record-card" data-id="' + esc(r.id) + '">' +
-    '<div class="record-head">' +
-      '<div>' + typeBadge + '<h3 class="record-title" style="margin-top:6px">' + esc(r.title || 'Untitled Record') + '</h3>' + contactRow + '</div>' +
-      '<div style="text-align:right">' + statusBadge + dueDateInfo + '</div>' +
-    '</div>' +
-    amountSection +
-    itemsSection +
-    gallery +
-    '<div class="record-actions">' +
-      (isDebtor && (r.status !== 'settled') ? '<button class="btn btn-sm btn-primary" type="button" data-pay>' + ICONS.check + ' Record Payment</button>' : '') +
-      (isOrder && (r.status !== 'received') ? '<button class="btn btn-sm btn-primary" type="button" data-receive>' + ICONS.check + ' Mark as Received</button>' : '') +
-      '<button class="btn btn-sm btn-quiet" type="button" data-edit>' + ICONS.edit + ' Edit</button>' +
-      '<button class="btn btn-sm btn-danger-quiet" type="button" data-del>' + ICONS.trash + ' Delete</button>' +
-      '<span class="stamp2" style="margin-left:auto">' + timeAgo(r.updatedAt || r.createdAt) + '</span>' +
-    '</div>' +
-    '</div>';
-}
-
-function openNewRecordSheet() {
-  var s = openSheet({ title: 'New Store Record' });
-  s.set(
-    '<p style="margin-bottom:14px;color:var(--muted)">Select what type of record or note you want to create:</p>' +
-    '<div style="display:grid;gap:12px">' +
-      '<button class="btn btn-block" type="button" id="nr-debtor" style="justify-content:flex-start;padding:14px 18px">' +
-        '<span style="color:var(--danger)">' + ICONS.shield + '</span>' +
-        '<div style="text-align:left"><div style="font-weight:700">Customer Debtor / Credit Sale</div><div class="hint">Record money owed by customer with items & receipt</div></div>' +
-      '</button>' +
-      '<button class="btn btn-block" type="button" id="nr-order" style="justify-content:flex-start;padding:14px 18px">' +
-        '<span style="color:var(--info)">' + ICONS.box + '</span>' +
-        '<div style="text-align:left"><div style="font-weight:700">Goods Ordered from Supplier</div><div class="hint">Track purchase orders, expected delivery & invoice</div></div>' +
-      '</button>' +
-      '<button class="btn btn-block" type="button" id="nr-receipt" style="justify-content:flex-start;padding:14px 18px">' +
-        '<span style="color:var(--ok)">' + ICONS.camera + '</span>' +
-        '<div style="text-align:left"><div style="font-weight:700">Store Receipt / Expense Bill</div><div class="hint">Snap photo of paper receipt, diesel bill, or shop expense</div></div>' +
-      '</button>' +
-      '<button class="btn btn-block" type="button" id="nr-note" style="justify-content:flex-start;padding:14px 18px">' +
-        '<span style="color:var(--muted)">' + ICONS.ledger + '</span>' +
-        '<div style="text-align:left"><div style="font-weight:700">General Store Note</div><div class="hint">Daily store reminder, checklist, or staff note</div></div>' +
-      '</button>' +
-    '</div>', '#nr-debtor');
-
-  $('#nr-debtor', s.body).onclick = function() { openDebtorForm(); };
-  $('#nr-order', s.body).onclick = function() { openOrderForm(); };
-  $('#nr-receipt', s.body).onclick = function() { openReceiptForm(); };
-  $('#nr-note', s.body).onclick = function() { openGeneralNoteForm(); };
-}
-
-function openDebtorForm(existing) {
-  var s = openSheet({ title: existing ? 'Edit Debtor Record' : 'Record Customer Debt' });
-  var attachedImages = existing && existing.images ? existing.images.slice() : [];
-
-  function draw() {
-    s.set(
-      '<form id="debt-form" novalidate>' +
-      '<div class="field"><label for="df-name">Customer Full Name</label>' +
-      '<input class="input" id="df-name" name="name" required placeholder="e.g. Alhaji Musa" value="' + esc((existing && (existing.contactName || existing.title)) || '') + '"></div>' +
-
-      '<div class="field"><label for="df-phone">Phone Number (optional)</label>' +
-      '<input class="input" id="df-phone" name="phone" type="tel" inputmode="tel" placeholder="e.g. 08012345678" value="' + esc((existing && existing.phone) || '') + '"></div>' +
-
-      '<div class="field"><label for="df-amt">Total Debt Amount (\u20A6)</label>' +
-      '<div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="df-amt" name="amount" inputmode="decimal" required placeholder="0.00" value="' + esc((existing && existing.amount) || '') + '"></div></div>' +
-
-      '<div class="field"><label for="df-paid">Initial Deposit / Amount Paid (\u20A6, optional)</label>' +
-      '<div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="df-paid" name="paid" inputmode="decimal" placeholder="0.00" value="' + esc((existing && existing.amountPaid) || '') + '"></div></div>' +
-
-      '<div class="field"><label for="df-items">Items Taken on Credit</label>' +
-      '<textarea class="input" id="df-items" name="items" placeholder="e.g. 2 bags of Mama Gold Rice, 1 carton Kings Oil">' + esc((existing && existing.items) || '') + '</textarea></div>' +
-
-      '<div class="field"><label for="df-due">Agreed Repayment Due Date (optional)</label>' +
-      '<input class="input" id="df-due" name="due" type="date" value="' + esc((existing && existing.dueDate) || '') + '"></div>' +
-
-      '<div class="field"><label>Attach Receipt / IOU / Agreement Photos</label>' +
-      '<label class="photo-uploader">' +
-        ICONS.camera + '<div style="font-weight:700;margin-top:4px">Snap or Upload Receipt Picture</div>' +
-        '<div class="hint">Takes photo with phone camera or selects from gallery</div>' +
-        '<input type="file" id="df-file" accept="image/*" capture="environment">' +
-      '</label>' +
-      '<div class="receipt-gallery" id="df-gallery" style="margin-top:10px">' +
-        attachedImages.map(function(img, idx) {
-          return '<div style="position:relative;display:inline-block">' +
-            '<img class="receipt-thumb" src="' + img.dataUrl + '">' +
-            '<button type="button" class="btn btn-sm btn-danger" data-del-img="' + idx + '" style="position:absolute;top:-4px;right:-4px;width:22px;height:22px;padding:0;min-height:0;border-radius:50%">\u00D7</button></div>';
-        }).join('') +
-      '</div></div>' +
-
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save Record</button></div>' +
-      '</form>', '#df-name');
-
-    var fileInput = $('#df-file', s.body);
-    fileInput.onchange = function() {
-      if (!this.files || !this.files[0]) return;
-      toast('Compressing receipt photo...');
-      compressReceiptImage(this.files[0], 1200, 0.75, function(err, dataUrl) {
-        if (err) { toast('Could not process image.', true); return; }
-        attachedImages.push({ id: 'img_' + Date.now(), dataUrl: dataUrl, date: new Date().toISOString() });
-        draw();
-      });
-    };
-
-    var delBtns = s.body.querySelectorAll('[data-del-img]');
-    for (var i = 0; i < delBtns.length; i++) {
-      delBtns[i].onclick = function() {
-        var idx = Number(this.getAttribute('data-del-img'));
-        attachedImages.splice(idx, 1);
-        draw();
-      };
-    }
-
-    $('#debt-form', s.body).onsubmit = function(e) {
-      e.preventDefault();
-      var form = this;
-      var name = form.name.value.trim();
-      var phone = form.phone.value.trim();
-      var amt = parsePrice(form.amount.value, 'Enter total debt amount.');
-      if (amt.err) { toast(amt.err, true); form.amount.focus(); return; }
-      var paidAmt = form.paid.value.trim() ? (parsePrice(form.paid.value, '').value || 0) : 0;
-      var bal = Math.max(0, amt.value - paidAmt);
-      var status = bal <= 0 ? 'settled' : (paidAmt > 0 ? 'partial' : 'unpaid');
-
-      var rec = existing || {};
-      rec.type = 'debtor';
-      rec.title = name;
-      rec.contactName = name;
-      rec.phone = phone;
-      rec.amount = amt.value;
-      rec.amountPaid = paidAmt;
-      rec.balance = bal;
-      rec.items = form.items.value.trim();
-      rec.dueDate = form.due.value;
-      rec.status = status;
-      rec.images = attachedImages;
-
-      STORE_DB.save(rec).then(function() {
-        closeSheet();
-        toast('Debtor record saved offline.');
-        loadRecords();
-      });
-    };
-  }
-  draw();
-}
-
-function openOrderForm(existing) {
-  var s = openSheet({ title: existing ? 'Edit Goods Order' : 'Record Goods Ordered' });
-  var attachedImages = existing && existing.images ? existing.images.slice() : [];
-
-  function draw() {
-    s.set(
-      '<form id="order-form" novalidate>' +
-      '<div class="field"><label for="of-supp">Supplier / Vendor Name</label>' +
-      '<input class="input" id="of-supp" name="supplier" required placeholder="e.g. Dangote Flour Mills Distributor" value="' + esc((existing && (existing.contactName || existing.title)) || '') + '"></div>' +
-
-      '<div class="field"><label for="of-phone">Supplier Phone (optional)</label>' +
-      '<input class="input" id="of-phone" name="phone" type="tel" inputmode="tel" placeholder="e.g. 08033334444" value="' + esc((existing && existing.phone) || '') + '"></div>' +
-
-      '<div class="field"><label for="of-items">Goods / Items Ordered</label>' +
-      '<textarea class="input" id="of-items" name="items" required placeholder="e.g. 50 Cartons Indomie Noodles, 20 Bags Sugar">' + esc((existing && existing.items) || '') + '</textarea></div>' +
-
-      '<div class="field"><label for="of-cost">Total Invoice / Order Value (\u20A6, optional)</label>' +
-      '<div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="of-cost" name="cost" inputmode="decimal" placeholder="0.00" value="' + esc((existing && existing.amount) || '') + '"></div></div>' +
-
-      '<div class="field"><label for="of-exp">Expected Delivery Date (optional)</label>' +
-      '<input class="input" id="of-exp" name="delivery" type="date" value="' + esc((existing && existing.dueDate) || '') + '"></div>' +
-
-      '<div class="field"><label for="of-stat">Order Status</label>' +
-      '<select class="input" id="of-stat" name="status">' +
-        '<option value="pending"' + (existing && existing.status === 'pending' ? ' selected' : '') + '>Pending Delivery</option>' +
-        '<option value="received"' + (existing && existing.status === 'received' ? ' selected' : '') + '>Received & Checked</option>' +
-      '</select></div>' +
-
-      '<div class="field"><label>Attach Purchase Order / Supplier Invoice Photo</label>' +
-      '<label class="photo-uploader">' +
-        ICONS.camera + '<div style="font-weight:700;margin-top:4px">Snap or Upload Invoice / Waybill</div>' +
-        '<input type="file" id="of-file" accept="image/*" capture="environment">' +
-      '</label>' +
-      '<div class="receipt-gallery" style="margin-top:10px">' +
-        attachedImages.map(function(img, idx) {
-          return '<div style="position:relative;display:inline-block"><img class="receipt-thumb" src="' + img.dataUrl + '"><button type="button" class="btn btn-sm btn-danger" data-del-img="' + idx + '" style="position:absolute;top:-4px;right:-4px;width:22px;height:22px;padding:0;min-height:0;border-radius:50%">\u00D7</button></div>';
-        }).join('') +
-      '</div></div>' +
-
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save Order</button></div>' +
-      '</form>', '#of-supp');
-
-    $('#of-file', s.body).onchange = function() {
-      if (!this.files || !this.files[0]) return;
-      toast('Processing invoice photo...');
-      compressReceiptImage(this.files[0], 1200, 0.75, function(err, dataUrl) {
-        if (err) { toast('Could not process image.', true); return; }
-        attachedImages.push({ id: 'img_' + Date.now(), dataUrl: dataUrl, date: new Date().toISOString() });
-        draw();
-      });
-    };
-
-    var delBtns = s.body.querySelectorAll('[data-del-img]');
-    for (var i = 0; i < delBtns.length; i++) {
-      delBtns[i].onclick = function() {
-        attachedImages.splice(Number(this.getAttribute('data-del-img')), 1);
-        draw();
-      };
-    }
-
-    $('#order-form', s.body).onsubmit = function(e) {
-      e.preventDefault();
-      var form = this;
-      var supp = form.supplier.value.trim();
-      var items = form.items.value.trim();
-      if (!supp) { toast('Enter supplier name.', true); form.supplier.focus(); return; }
-      if (!items) { toast('Enter items ordered.', true); form.items.focus(); return; }
-      var cost = form.cost.value.trim() ? (parsePrice(form.cost.value, '').value || 0) : null;
-
-      var rec = existing || {};
-      rec.type = 'order';
-      rec.title = supp + ' (Order)';
-      rec.contactName = supp;
-      rec.phone = form.phone.value.trim();
-      rec.items = items;
-      rec.amount = cost;
-      rec.dueDate = form.delivery.value;
-      rec.status = form.status.value;
-      rec.images = attachedImages;
-
-      STORE_DB.save(rec).then(function() {
-        closeSheet();
-        toast('Order record saved.');
-        loadRecords();
-      });
-    };
-  }
-  draw();
-}
-
-function openReceiptForm(existing) {
-  var s = openSheet({ title: existing ? 'Edit Store Receipt' : 'Snap & Save Store Receipt' });
-  var attachedImages = existing && existing.images ? existing.images.slice() : [];
-
-  function draw() {
-    s.set(
-      '<form id="rec-form" novalidate>' +
-      '<div class="field"><label for="rf-title">Receipt Title / Description</label>' +
-      '<input class="input" id="rf-title" name="title" required placeholder="e.g. Generator Diesel Fuel 50L, Shop Rent, NEPA" value="' + esc((existing && existing.title) || '') + '"></div>' +
-
-      '<div class="field"><label for="rf-amt">Amount Paid (\u20A6)</label>' +
-      '<div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="rf-amt" name="amount" inputmode="decimal" placeholder="0.00" value="' + esc((existing && existing.amount) || '') + '"></div></div>' +
-
-      '<div class="field"><label for="rf-notes">Notes / Vendor Details</label>' +
-      '<textarea class="input" id="rf-notes" name="notes" placeholder="e.g. Bought from Total Filling Station">' + esc((existing && (existing.items || existing.notes)) || '') + '</textarea></div>' +
-
-      '<div class="field"><label>Receipt Photo</label>' +
-      '<label class="photo-uploader">' +
-        ICONS.camera + '<div style="font-weight:700;margin-top:4px">Snap Receipt Photo with Camera</div>' +
-        '<div class="hint">Will be compressed and saved securely on this device</div>' +
-        '<input type="file" id="rf-file" accept="image/*" capture="environment">' +
-      '</label>' +
-      '<div class="receipt-gallery" style="margin-top:10px">' +
-        attachedImages.map(function(img, idx) {
-          return '<div style="position:relative;display:inline-block"><img class="receipt-thumb" src="' + img.dataUrl + '"><button type="button" class="btn btn-sm btn-danger" data-del-img="' + idx + '" style="position:absolute;top:-4px;right:-4px;width:22px;height:22px;padding:0;min-height:0;border-radius:50%">\u00D7</button></div>';
-        }).join('') +
-      '</div></div>' +
-
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save Receipt</button></div>' +
-      '</form>', '#rf-title');
-
-    $('#rf-file', s.body).onchange = function() {
-      if (!this.files || !this.files[0]) return;
-      toast('Processing receipt photo...');
-      compressReceiptImage(this.files[0], 1200, 0.75, function(err, dataUrl) {
-        if (err) { toast('Could not process photo.', true); return; }
-        attachedImages.push({ id: 'img_' + Date.now(), dataUrl: dataUrl, date: new Date().toISOString() });
-        draw();
-      });
-    };
-
-    var delBtns = s.body.querySelectorAll('[data-del-img]');
-    for (var i = 0; i < delBtns.length; i++) {
-      delBtns[i].onclick = function() {
-        attachedImages.splice(Number(this.getAttribute('data-del-img')), 1);
-        draw();
-      };
-    }
-
-    $('#rec-form', s.body).onsubmit = function(e) {
-      e.preventDefault();
-      var form = this;
-      var title = form.title.value.trim();
-      if (!title) { toast('Enter receipt title.', true); form.title.focus(); return; }
-      var amt = form.amount.value.trim() ? (parsePrice(form.amount.value, '').value || 0) : null;
-
-      var rec = existing || {};
-      rec.type = 'receipt';
-      rec.title = title;
-      rec.amount = amt;
-      rec.items = form.notes.value.trim();
-      rec.images = attachedImages;
-
-      STORE_DB.save(rec).then(function() {
-        closeSheet();
-        toast('Store receipt saved.');
-        loadRecords();
-      });
-    };
-  }
-  draw();
-}
-
-function openGeneralNoteForm(existing) {
-  var s = openSheet({ title: existing ? 'Edit Note' : 'New General Store Note' });
-  s.set(
-    '<form id="note-form" novalidate>' +
-    '<div class="field"><label for="nf-title">Note Subject / Heading</label>' +
-    '<input class="input" id="nf-title" name="title" required placeholder="e.g. End of Month Inventory Checklist" value="' + esc((existing && existing.title) || '') + '"></div>' +
-
-    '<div class="field"><label for="nf-content">Notes & Reminders</label>' +
-    '<textarea class="input" id="nf-content" name="content" style="min-height:120px" required placeholder="Write your notes here...">' + esc((existing && existing.items) || '') + '</textarea></div>' +
-
-    '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save Note</button></div>' +
-    '</form>', '#nf-title');
-
-  $('#note-form', s.body).onsubmit = function(e) {
-    e.preventDefault();
-    var title = this.title.value.trim();
-    var content = this.content.value.trim();
-    if (!title) { toast('Enter subject.', true); this.title.focus(); return; }
-
-    var rec = existing || {};
-    rec.type = 'note';
-    rec.title = title;
-    rec.items = content;
-
-    STORE_DB.save(rec).then(function() {
-      closeSheet();
-      toast('Note saved.');
-      loadRecords();
-    });
-  };
-}
-
-function openPaymentSheet(rec) {
-  var bal = Number(rec.balance != null ? rec.balance : (Number(rec.amount || 0) - Number(rec.amountPaid || 0)));
-  var s = openSheet({ title: 'Record Debt Payment' });
-  var attachedSlip = null;
-
-  function draw() {
-    s.set(
-      '<div class="detail-hero" style="margin-bottom:14px;padding:12px 14px">' +
-        '<div class="name" style="font-size:1.1rem">' + esc(rec.contactName || rec.title) + '</div>' +
-        '<div style="display:flex;gap:16px;margin-top:8px">' +
-          '<div><span class="lbl" style="font-size:0.75rem;color:var(--muted)">Total Debt:</span> <strong>' + money(rec.amount || 0) + '</strong></div>' +
-          '<div><span class="lbl" style="font-size:0.75rem;color:var(--muted)">Remaining:</span> <strong style="color:var(--danger)">' + money(bal) + '</strong></div>' +
-        '</div>' +
-      '</div>' +
-
-      '<form id="pay-form" novalidate>' +
-      '<div class="field"><label for="pf-amt">Amount Received (\u20A6)</label>' +
-      '<div class="input-wrap"><span class="input-affix">\u20A6</span><input class="input has-prefix" id="pf-amt" name="amount" inputmode="decimal" required placeholder="0.00" value="' + esc(numStr(bal)) + '"></div></div>' +
-
-      '<div class="field"><label for="pf-note">Payment Note (e.g. Cash, OPay Transfer)</label>' +
-      '<input class="input" id="pf-note" name="note" placeholder="e.g. Paid in cash to shopkeeper"></div>' +
-
-      '<div class="field"><label>Attach Transfer / Receipt Slip Photo</label>' +
-      '<label class="photo-uploader">' +
-        ICONS.camera + '<div style="font-weight:700;margin-top:4px">Snap Payment Proof</div>' +
-        '<input type="file" id="pf-file" accept="image/*" capture="environment">' +
-      '</label>' +
-      (attachedSlip ? '<div style="margin-top:8px"><img class="receipt-thumb" src="' + attachedSlip + '"></div>' : '') +
-      '</div>' +
-
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Confirm Payment</button></div>' +
-      '</form>', '#pf-amt');
-
-    $('#pf-file', s.body).onchange = function() {
-      if (!this.files || !this.files[0]) return;
-      toast('Processing photo...');
-      compressReceiptImage(this.files[0], 1200, 0.75, function(err, dataUrl) {
-        if (err) return;
-        attachedSlip = dataUrl;
-        draw();
-      });
-    };
-
-    $('#pay-form', s.body).onsubmit = function(e) {
-      e.preventDefault();
-      var amtRes = parsePrice(this.amount.value, 'Enter payment amount.');
-      if (amtRes.err) { toast(amtRes.err, true); this.amount.focus(); return; }
-
-      var paidNow = amtRes.value;
-      var newTotalPaid = Number(rec.amountPaid || 0) + paidNow;
-      var newBal = Math.max(0, Number(rec.amount || 0) - newTotalPaid);
-
-      rec.amountPaid = newTotalPaid;
-      rec.balance = newBal;
-      rec.status = newBal <= 0 ? 'settled' : 'partial';
-
-      if (!rec.payments) rec.payments = [];
-      rec.payments.push({
-        amount: paidNow,
-        note: this.note.value.trim(),
-        date: new Date().toISOString()
-      });
-
-      if (attachedSlip) {
-        if (!rec.images) rec.images = [];
-        rec.images.push({ id: 'slip_' + Date.now(), dataUrl: attachedSlip, date: new Date().toISOString() });
-      }
-
-      STORE_DB.save(rec).then(function() {
-        closeSheet();
-        toast('Payment recorded: ' + money(paidNow));
-        loadRecords();
-      });
-    };
-  }
-  draw();
-}
-
-function openEditRecordSheet(rec) {
-  if (rec.type === 'debtor') openDebtorForm(rec);
-  else if (rec.type === 'order') openOrderForm(rec);
-  else if (rec.type === 'receipt') openReceiptForm(rec);
-  else openGeneralNoteForm(rec);
-}
-
-function markOrderReceived(rec) {
-  rec.status = 'received';
-  STORE_DB.save(rec).then(function() {
-    toast('Order marked as received.');
-    loadRecords();
-  });
-}
-
-function deleteRecord(rec) {
-  if (confirm('Delete "' + (rec.title || 'this entry') + '" and any attached receipt photos?')) {
-    STORE_DB.delete(rec.id).then(function() {
-      toast('Record removed.');
-      loadRecords();
-    });
-  }
-}
-
-function openBackupSheet() {
-  var s = openSheet({ title: 'Backup & Restore Store Notes' });
-  s.set(
-    '<p style="margin-bottom:14px;color:var(--muted)">Export your debtors, supplier orders, and receipt pictures to a safe file on your phone or computer.</p>' +
-    '<div style="display:grid;gap:12px">' +
-      '<button class="btn btn-primary btn-block" type="button" id="bk-export">' + ICONS.download + ' Export Backup File (.JSON)</button>' +
-      '<label class="btn btn-quiet btn-block" style="cursor:pointer">' +
-        ICONS.ledger + ' Restore Records from Backup File' +
-        '<input type="file" id="bk-import" accept=".json,application/json" style="display:none">' +
-      '</label>' +
-    '</div>', '#bk-export');
-
-  $('#bk-export', s.body).onclick = function() {
-    STORE_DB.getAll().then(function(list) {
-      var blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' });
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'mallonomo_store_records_' + new Date().toISOString().slice(0, 10) + '.json';
-      a.click();
-      toast('Backup file downloaded.');
-    });
-  };
-
-  $('#bk-import', s.body).onchange = function() {
-    if (!this.files || !this.files[0]) return;
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      try {
-        var imported = JSON.parse(e.target.result);
-        if (!Array.isArray(imported)) throw new Error('Invalid format');
-        var count = 0;
-        var p = Promise.resolve();
-        imported.forEach(function(item) {
-          p = p.then(function() { return STORE_DB.save(item); }).then(function() { count++; });
-        });
-        p.then(function() {
-          closeSheet();
-          toast('Successfully restored ' + count + ' records.');
-          loadRecords();
-        });
-      } catch(err) {
-        toast('Failed to import backup file.', true);
-      }
-    };
-    reader.readAsText(this.files[0]);
-  };
-}
-
-/* ------------------------------------------------------------------
-   Price History & Audit Log
-------------------------------------------------------------------- */
-function numOrNull(v) { return v == null ? null : Number(v); }
-function histLines(h) {
-  var lines = [];
-  if (h.old_price == null) {
-    lines.push('<span class="change-pill new">Product Created</span> Listed: <strong>' + money(h.new_price) + '</strong>' +
-      (h.new_min_price != null ? ' &bull; Min: <strong>' + money(h.new_min_price) + '</strong>' : ''));
-    return lines;
-  }
-  if (Number(h.old_price) !== Number(h.new_price)) {
-    var up = Number(h.new_price) > Number(h.old_price);
-    var pDiff = Number(h.new_price) - Number(h.old_price);
-    var pct = Number(h.old_price) > 0 ? Math.round((pDiff / Number(h.old_price)) * 100) : 0;
-    lines.push('<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0">' +
-      '<span class="change-pill ' + (up ? 'up' : 'down') + '">' + (up ? ICONS.trendUp : ICONS.trendDown) + ' ' + (up ? '+' : '') + pct + '%</span>' +
-      'Listed: <span style="text-decoration:line-through;color:var(--muted)">' + esc(priceLabel(h.old_price)) + '</span> &rarr; <strong>' + money(h.new_price) + '</strong></div>');
-  }
-  if (numOrNull(h.old_min_price) !== numOrNull(h.new_min_price)) {
-    lines.push('<div style="font-size:0.875rem;color:var(--muted);margin-top:2px">Lowest Bargain: ' + esc(lowLabel(h.old_min_price)) + ' &rarr; <strong>' + esc(lowLabel(h.new_min_price)) + '</strong></div>');
-  }
-  return lines;
-}
-
-function histRow(h) {
-  var pr = h.products || {};
-  var who = h.changed_by && state.names[h.changed_by] ? state.names[h.changed_by] : 'Staff';
-  var lines = histLines(h).join('');
-  return '<li class="hitem">' +
-    '<div class="hitem-header">' +
-      '<span class="name">' + esc(pr.name || 'Product') + '</span>' +
-      (pr.unit ? '<span class="badge">' + esc(String(pr.unit).toLowerCase()) + '</span>' : '') +
-    '</div>' +
-    lines +
-    '<div class="stamp2">' + timeAgo(h.changed_at) + ' &bull; ' + fmtDate(h.changed_at) + ' by <strong>' + esc(who) + '</strong></div>' +
-    '</li>';
-}
-
-function renderHistoryView(box) {
-  var prod = state.histProduct;
-  state.hist = { rows: [], more: false, loading: false, error: '', term: '', date: '', token: 0 };
-
-  box.innerHTML =
-    '<main class="wrap">' +
-    '<div class="sec-head">' +
-      '<h2>Price History & Audit</h2>' +
-      (prod ? '<button class="btn btn-sm" id="hback" type="button">&larr; Back to Products</button>' : '') +
-    '</div>' +
-    (prod ? '<div class="banner info">Showing price changes for <strong>' + esc(prod.name) + '</strong></div>'
-          : '<div class="search" style="margin-bottom:12px"><span class="search-icon">' + ICONS.search + '</span>' +
-            '<label class="sr" for="hq">Search price history</label><input class="input" id="hq" type="search" placeholder="Filter audit trail by product name..." autocomplete="off"></div>') +
-    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">' +
-      '<div class="field" style="margin:0;flex:1"><input class="input" id="hd" type="date" aria-label="Filter by date"></div>' +
-      '<button class="btn btn-quiet" id="hdc" type="button" hidden>Clear Date</button>' +
-    '</div>' +
-    '<div id="hbox"></div>' +
-    '</main>';
-
-  var back = $('#hback');
-  if (back) back.onclick = function () { state.histProduct = null; showView('products'); };
-
-  var hq = $('#hq'), timer = null;
-  if (hq) hq.addEventListener('input', function () {
-    clearTimeout(timer);
-    timer = setTimeout(function () { state.hist.term = hq.value; loadHistory(true); }, 300);
-  });
-  $('#hd').addEventListener('change', function () {
-    state.hist.date = this.value; $('#hdc').hidden = !this.value; loadHistory(true);
-  });
-  $('#hdc').onclick = function () { $('#hd').value = ''; state.hist.date = ''; this.hidden = true; loadHistory(true); };
-
-  $('#hbox').addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('[data-act]');
-    if (!b) return;
-    if (b.getAttribute('data-act') === 'hmore') loadHistory(false);
-    else if (b.getAttribute('data-act') === 'hretry') loadHistory(true);
-  });
-
-  loadHistory(true);
-}
-
-function drawHistory() {
-  var box = $('#hbox'); if (!box) return;
-  var h = state.hist, html = '';
-  if (h.rows.length) {
-    html += '<ul class="list">' + h.rows.map(histRow).join('') + '</ul>';
-    if (h.more && !h.loading) {
-      html += '<button class="btn btn-block more" style="margin-top:14px" type="button" data-act="hmore">Load Older Changes</button>';
-    }
-  }
-  if (h.loading) {
-    html += '<div class="empty-state">' + ICONS.history + '<h3>Loading Price Audit...</h3></div>';
-  } else if (h.error) {
-    html += '<div class="banner bad" role="alert">' + esc(h.error) + '<button class="link" type="button" data-act="hretry">Retry</button></div>';
-  } else if (!h.rows.length) {
-    html += '<div class="empty-state">' + ICONS.history + '<h3>No History Recorded</h3><p>' +
-      (h.term.trim() || h.date ? 'No price changes match the active filter.' :
-      (state.histProduct ? 'No price changes recorded for this item yet.' : 'No price changes recorded yet.')) + '</p></div>';
-  }
-  box.innerHTML = html;
-}
-
-function loadHistory(reset) {
-  var h = state.hist;
-  if (!h || (h.loading && !reset)) return;
-  if (state.offlineMode || !sb) {
-    h.rows = []; h.loading = false;
-    drawHistory(); return;
-  }
-  var token = ++h.token;
-  if (reset) { h.rows = []; h.more = false; }
-  h.loading = true; h.error = '';
-  drawHistory();
-
-  var size = 50, from = h.rows.length;
-  var term = h.term.replace(/[%_,()*\\]/g, ' ').replace(/\s+/g, ' ').trim();
-  var prod = state.histProduct;
-
-  timed(function (sig) {
-    var sel = 'id,product_id,old_price,new_price,old_min_price,new_min_price,changed_by,changed_at,products' + (term ? '!inner' : '') + '(name,unit)';
-    var q = sb.from('price_history').select(sel).order('changed_at', { ascending: false }).order('id', { ascending: false }).range(from, from + size - 1);
-    if (prod) q = q.eq('product_id', prod.id);
-    if (term) q = q.ilike('products.name', '%' + term + '%');
-    if (h.date) {
-      var d0 = new Date(h.date + 'T00:00:00'), d1 = new Date(d0.getTime());
-      d1.setDate(d1.getDate() + 1);
-      q = q.gte('changed_at', d0.toISOString()).lt('changed_at', d1.toISOString());
-    }
-    return q.abortSignal(sig);
-  }, 20000).then(function (r) {
-    if (token !== h.token || state.view !== 'history') return;
-    h.loading = false;
-    if (r.error) {
-      if (isExpired(r.error)) { state.notice = 'Session expired.'; doLogout(); return; }
-      h.error = r.error.timeout ? 'Request took too long.' : 'Could not load history.';
-      drawHistory(); return;
-    }
-    var rows = r.data || [];
-    h.rows = h.rows.concat(rows); h.more = rows.length === size;
-    drawHistory();
-  });
-}
-
-/* ------------------------------------------------------------------
-   Workers Management (Owner Only)
-------------------------------------------------------------------- */
-function confirmStep(s, back, messageHtml, goLabel, danger, run) {
-  s.dirty = null;
-  s.set(
-    '<p>' + messageHtml + '</p><div id="cerr" class="form-err" role="alert" style="margin-top:14px"></div>' +
-    '<div class="actions"><button class="btn" type="button" id="cno">Cancel</button><button class="btn ' + (danger ? 'btn-danger' : 'btn-primary') + '" type="button" id="cyes">' + esc(goLabel) + '</button></div>', '#cno');
-  $('#cno', s.body).onclick = back;
-  $('#cyes', s.body).onclick = function () {
-    if (s.busy) return;
-    var b = this, old = b.textContent;
-    s.busy = true; b.disabled = true; b.textContent = 'Saving...';
-    run().then(function (msg) {
-      s.busy = false;
-      if (msg) { b.disabled = false; b.textContent = old; var e = $('#cerr', s.body); if (e) e.textContent = msg; }
-    });
-  };
-}
-
-function renderWorkersView(box) {
-  box.innerHTML =
-    '<main class="wrap">' +
-    '<div class="sec-head"><h2>Staff Access & Permissions</h2></div>' +
-    '<p class="hint" style="margin-bottom:16px">Approve new worker accounts and manage owner privileges.</p>' +
-    '<div id="wbox"><div class="empty-state">' + ICONS.users + '<h3>Loading Staff List...</h3></div></div>' +
-    '</main>';
-
-  $('#wbox').addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('[data-act]');
-    if (!b) return;
-    var act = b.getAttribute('data-act'), wid = b.getAttribute('data-id');
-    if (act === 'worker') openWorkerSheet(wid);
-    else if (act === 'approve-quick') quickApprove(wid);
-    else if (act === 'wretry') loadWorkers();
-  });
-  loadWorkers();
-}
-
-function quickApprove(wid) {
-  var w = null;
-  for (var i = 0; i < state.workers.length; i++) if (state.workers[i].id === wid) w = state.workers[i];
-  if (!w) return;
-  setProfile(w, { active: true }, 'Worker ' + (w.full_name || '') + ' approved.');
-}
-
-function loadWorkers() {
-  if (state.offlineMode || !sb) return;
-  timed(function (sig) {
-    return sb.from('profiles').select('id,full_name,email,role,active,created_at').order('created_at', { ascending: false }).abortSignal(sig);
-  }, 15000).then(function (r) {
-    if (state.view !== 'workers') return;
-    var box = $('#wbox'); if (!box) return;
-    if (r.error) {
-      if (isExpired(r.error)) { state.notice = 'Session expired.'; doLogout(); return; }
-      box.innerHTML = '<div class="banner bad" role="alert">Could not load staff.<button class="link" type="button" data-act="wretry">Retry</button></div>';
-      return;
-    }
-    state.workers = r.data || [];
-    drawWorkers();
-  });
-}
-
-function workerRow(w) {
-  var you = w.id === state.userId;
-  var initials = getInitials(w.full_name);
-  return '<li class="item">' +
-    '<div class="rowbtn" style="cursor:default">' +
-      '<div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;cursor:pointer" data-act="worker" data-id="' + esc(w.id) + '">' +
-        '<div class="avatar-dot" style="width:38px;height:38px;font-size:0.9rem">' + esc(initials) + '</div>' +
-        '<div style="min-width:0">' +
-          '<div class="name">' + esc(w.full_name || 'Unnamed Staff') + (you ? ' <span class="badge">(You)</span>' : '') + '</div>' +
-          '<div class="hint">' + esc(w.email || 'No email on file') + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;flex:none">' +
-        '<span class="role-badge ' + (w.role === 'owner' ? 'owner' : '') + '">' + (w.role === 'owner' ? 'Owner' : 'Worker') + '</span>' +
-        (!w.active
-          ? '<button class="btn btn-sm btn-primary" type="button" data-act="approve-quick" data-id="' + esc(w.id) + '">Approve</button>'
-          : '<button class="btn btn-sm btn-quiet" type="button" data-act="worker" data-id="' + esc(w.id) + '">Manage</button>') +
-      '</div>' +
-    '</div></li>';
-}
-
-function drawWorkers() {
-  var box = $('#wbox'); if (!box) return;
-  var off = state.workers.filter(function (w) { return !w.active; });
-  var on = state.workers.filter(function (w) { return w.active; });
-  if (!state.workers.length) {
-    box.innerHTML = '<div class="empty-state">' + ICONS.users + '<h3>No Workers Found</h3></div>';
-    return;
-  }
-  var html = '';
-  if (off.length) {
-    html += '<h3 class="sec2" style="color:var(--warn)">Pending Approval (' + off.length + ')</h3><ul class="list">' + off.map(workerRow).join('') + '</ul>';
-  }
-  if (on.length) {
-    html += '<h3 class="sec2">Active Staff (' + on.length + ')</h3><ul class="list">' + on.map(workerRow).join('') + '</ul>';
-  }
-  box.innerHTML = html;
-}
-
-function setProfile(w, patch, okMsg) {
-  if (state.offlineMode || !sb) return Promise.resolve('');
-  return timed(function (sig) {
-    return sb.from('profiles').update(patch).eq('id', w.id).select('id,full_name,email,role,active,created_at').abortSignal(sig);
-  }, 15000).then(function (r) {
-    if (r.error) {
-      if (/last active owner/i.test(String(r.error.message || ''))) return 'You cannot remove the last active owner.';
-      return writeErr(r.error, 'Account could not be updated.');
-    }
-    if (!r.data || !r.data.length) return 'Only store owners can manage staff accounts.';
-    for (var i = 0; i < state.workers.length; i++) {
-      if (state.workers[i].id === w.id) state.workers[i] = r.data[0];
-    }
-    drawWorkers(); closeSheet(); toast(okMsg);
-    return '';
-  });
-}
-
-function openWorkerSheet(id) {
-  var w = null;
-  for (var i = 0; i < state.workers.length; i++) if (state.workers[i].id === id) w = state.workers[i];
-  if (!w) return;
-  var self = w.id === state.userId;
-  var s = openSheet({ title: 'Staff Member Profile' });
-  var nm = esc(w.full_name || 'this worker');
-
-  function draw() {
-    s.dirty = null;
-    s.set(
-      '<div class="detail-hero">' +
-        '<h3 class="name" style="font-size:1.2rem">' + esc(w.full_name || 'Unnamed') + '</h3>' +
-        '<p class="hint">' + esc(w.email || 'No email on file') + '</p>' +
-        '<div style="display:flex;gap:12px;margin-top:10px">' +
-          '<span class="role-badge ' + (w.role === 'owner' ? 'owner' : '') + '">' + (w.role === 'owner' ? 'Owner' : 'Worker') + '</span>' +
-          '<span class="stock-pill ' + (w.active ? 'in' : 'out') + '"><span class="stock-dot"></span>' + (w.active ? 'Active Access' : 'No Access') + '</span>' +
-        '</div>' +
-      '</div>' +
-      (self ? '<p class="hint">This is your current logged-in account.</p>' : '') +
-      '<div style="display:grid;gap:10px;margin-top:20px">' +
-      (self ? '' : (w.active
-        ? '<button class="btn" type="button" id="w-role">' + (w.role === 'owner' ? 'Demote to Worker' : 'Promote to Owner') + '</button><button class="btn btn-danger-quiet" type="button" id="w-off">Deactivate Account</button>'
-        : '<button class="btn btn-primary" type="button" id="w-on">Approve Account Access</button>')) +
-      '<button class="btn btn-quiet" type="button" data-close>Close</button></div>', self ? null : (w.active ? '#w-role' : '#w-on'));
-
-    var on = $('#w-on', s.body), off = $('#w-off', s.body), role = $('#w-role', s.body);
-    if (on) on.onclick = function () {
-      confirmStep(s, draw, 'Approve access for <strong>' + nm + '</strong>? They will be permitted to view and update prices.', 'Approve Access', false,
-        function () { return setProfile(w, { active: true }, 'Worker access approved.'); });
-    };
-    if (off) off.onclick = function () {
-      confirmStep(s, draw, 'Deactivate account for <strong>' + nm + '</strong>? They will be locked out immediately.', 'Deactivate Account', true,
-        function () { return setProfile(w, { active: false }, 'Account deactivated.'); });
-    };
-    if (role) role.onclick = function () {
-      var toOwner = w.role !== 'owner';
-      confirmStep(s, draw, toOwner
-        ? 'Make <strong>' + nm + '</strong> an Owner? Owners have full privileges to manage categories, delete products, and manage staff.'
-        : 'Remove Owner privileges for <strong>' + nm + '</strong>?', toOwner ? 'Make Owner' : 'Demote to Worker', !toOwner,
-        function () { return setProfile(w, { role: toOwner ? 'owner' : 'worker' }, 'Role updated.'); });
-    };
-  }
-  draw();
-}
-
-/* ------------------------------------------------------------------
-   Categories Management (Owner Only)
-------------------------------------------------------------------- */
-function catCount(id) {
-  var n = 0;
-  for (var i = 0; i < state.products.length; i++) if (state.products[i].category_id === id) n++;
-  return n;
-}
-function sortCategories() {
-  state.categories.sort(function (a, b) { return (a.sort_order - b.sort_order) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }); });
-}
-
-function renderCategoriesView(box) {
-  box.innerHTML =
-    '<main class="wrap">' +
-    '<div class="sec-head"><h2>Product Categories</h2><button class="btn btn-primary btn-sm" id="cadd" type="button">' + ICONS.plus + ' Add Category</button></div>' +
-    '<p class="hint" style="margin-bottom:16px">Organize products into store departments and shelves.</p>' +
-    '<div id="cbox"></div>' +
-    '</main>';
-  $('#cadd').onclick = function () { openCategorySheet(null); };
-  $('#cbox').addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('[data-act="cat"]');
-    if (b) openCategorySheet(b.getAttribute('data-id'));
-  });
-  drawCategories();
-}
-
-function drawCategories() {
-  var box = $('#cbox'); if (!box) return;
-  if (!state.loadedOnce && !state.offlineMode) { box.innerHTML = '<div class="empty-state">' + ICONS.tag + '<h3>Loading Categories...</h3></div>'; return; }
-  if (!state.categories.length) {
-    box.innerHTML = '<div class="empty-state">' + ICONS.tag + '<h3>No Categories Yet</h3><p>Create categories to group products in Price Manager.</p><button class="btn btn-primary" onclick="openCategorySheet(null)">' + ICONS.plus + ' Add First Category</button></div>';
-    return;
-  }
-  box.innerHTML = '<ul class="list">' + state.categories.map(function (c) {
-    var n = catCount(c.id);
-    return '<li class="item"><button class="rowbtn" type="button" data-act="cat" data-id="' + esc(c.id) + '">' +
-      '<div style="display:flex;align-items:center;gap:12px"><span style="color:var(--accent)">' + ICONS.tag + '</span><span class="name">' + esc(c.name) + '</span></div>' +
-      '<div style="display:flex;align-items:center;gap:8px"><span class="badge">' + n + (n === 1 ? ' item' : ' items') + '</span><span class="row-chevron">' + ICONS.chevron + '</span></div>' +
-      '</button></li>';
-  }).join('') + '</ul>';
-}
-
-function openCategorySheet(id) {
-  var c = null;
-  if (id) for (var i = 0; i < state.categories.length; i++) if (state.categories[i].id === id) c = state.categories[i];
-  if (id && !c) return;
-  if (!state.fresh && !state.offlineMode) { toast('Please refresh data before modifying categories.', true); return; }
-
-  var s = openSheet({ title: c ? 'Edit Category' : 'Add New Category', discardMsg: 'Discard changes?' });
-  function afterChange() {
-    sortCategories(); rebuildCatMap(); saveCache();
-    if (state.browse && state.browse.type === 'cat' && !state.catMap[state.browse.id]) state.browse = null;
-    drawCategories(); renderList();
-  }
-
-  function draw(msg) {
-    s.setTitle(c ? 'Edit Category' : 'Add New Category');
-    s.dirty = function () { var f = $('#cn', s.body); return !!(f && f.value.trim() !== (c ? c.name : '')); };
-    s.set(
-      (msg ? '<div class="form-err" role="alert">' + esc(msg) + '</div>' : '') +
-      '<div id="cerr" class="form-err" role="alert"></div>' +
-      '<form id="cf" novalidate><div class="field"><label for="cn">Category Name</label>' +
-      '<input class="input" id="cn" maxlength="80" autocomplete="off" placeholder="e.g. Beverages, Canned Foods" value="' + esc(c ? c.name : '') + '"></div>' +
-      '<div class="actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="csave">Save Category</button></div></form>' +
-      (c ? '<div class="actions one" style="margin-top:22px;border-top:1.5px solid var(--line);padding-top:16px"><button class="btn btn-danger-quiet" type="button" id="cdel">Delete Category</button></div>' : ''), '#cn');
-
-    $('#cf', s.body).addEventListener('submit', onSave);
-    var d = $('#cdel', s.body); if (d) d.onclick = onDelete;
-  }
-
-  function onSave(e) {
-    e.preventDefault();
-    var box = $('#cerr', s.body); box.textContent = '';
-    var name = $('#cn', s.body).value.trim().replace(/\s+/g, ' ');
-    if (!name) { box.textContent = 'Enter category name.'; return; }
-    var dup = state.categories.some(function (x) { return (!c || x.id !== c.id) && x.name.toLowerCase() === name.toLowerCase(); });
-    if (dup) { box.textContent = 'This category name already exists.'; return; }
-    if (c && name === c.name) { box.textContent = 'No changes made.'; return; }
-
-    if (s.busy) return;
-    var btn = $('#csave', s.body); s.busy = true; btn.disabled = true; btn.textContent = 'Saving...';
-    var m = 0; state.categories.forEach(function (x) { if (x.sort_order < 99 && x.sort_order > m) m = x.sort_order; });
-
-    if (state.offlineMode || !sb) {
-      if (c) c.name = name;
-      else state.categories.push({ id: 'cat_' + Date.now(), name: name, sort_order: m + 1 });
-      afterChange(); closeSheet(); toast('Category saved.'); return;
-    }
-
-    timed(function (sig) {
-      var q = c ? sb.from('categories').update({ name: name }).eq('id', c.id) : sb.from('categories').insert({ name: name, sort_order: m + 1 });
-      return q.select('id,name,sort_order').abortSignal(sig);
-    }, 15000).then(function (r) {
-      s.busy = false;
-      if (r.error || !r.data || !r.data.length) {
-        btn.disabled = false; btn.textContent = 'Save Category';
-        box.textContent = r.error ? (r.error.code === '23505' ? 'This category already exists.' : writeErr(r.error, 'Category could not be saved.')) : 'Only owners can manage categories.';
-        return;
-      }
-      if (c) {
-        for (var i = 0; i < state.categories.length; i++) if (state.categories[i].id === c.id) state.categories[i] = r.data[0];
-      } else {
-        state.categories.push(r.data[0]);
-      }
-      afterChange(); closeSheet(); toast('Category saved.');
-    });
-  }
-
-  function onDelete() {
-    if (catCount(c.id) > 0) {
-      draw('This category contains ' + catCount(c.id) + ' products. Reassign or remove those products before deleting this category.');
-      return;
-    }
-    confirmStep(s, function () { draw(); }, 'Delete category <strong>' + esc(c.name) + '</strong>?', 'Delete Category', true, function () {
-      if (state.offlineMode || !sb) {
-        state.categories = state.categories.filter(function (x) { return x.id !== c.id; });
-        afterChange(); closeSheet(); toast('Category deleted.'); return Promise.resolve('');
-      }
-      return timed(function (sig) { return sb.from('categories').delete().eq('id', c.id).select('id').abortSignal(sig); }, 15000).then(function (r) {
-        if (r.error) return writeErr(r.error, 'Category could not be deleted.');
-        if (!r.data || !r.data.length) return 'Only owners can delete categories.';
-        state.categories = state.categories.filter(function (x) { return x.id !== c.id; });
-        afterChange(); closeSheet(); toast('Category deleted.');
-        return '';
-      });
-    });
-  }
-
-  draw();
-}
-
-/* ------------------------------------------------------------------
-   Logout Confirmation Dialog
-------------------------------------------------------------------- */
-function confirmLogout() {
-  var s = openSheet({ title: 'Sign Out' });
-  var who = state.profile && state.profile.full_name ? state.profile.full_name : (state.session && state.session.user ? state.session.user.email : 'Staff');
-  s.set(
-    '<p>Logged in as <strong>' + esc(who) + '</strong>.</p>' +
-    '<p style="margin-top:8px">Do you want to log out of Price Manager on this device?</p>' +
-    '<div class="actions"><button class="btn" type="button" data-close>Stay Signed In</button>' +
-    '<button class="btn btn-primary" type="button" id="yes">Yes, Sign Out</button></div>', '#yes');
-  $('#yes', s.body).onclick = function () { this.disabled = true; closeSheet(false); doLogout(); };
-}
-
-/* ------------------------------------------------------------------
-   Boot & Lifecycle
-------------------------------------------------------------------- */
-if (/error_code=otp_expired|error=access_denied/.test(initialHash)) {
-  state.notice = 'The verification link has expired. Request a new password reset link.';
-}
-if (initialHash && /access_token|error_description|error_code/.test(initialHash)) {
-  setTimeout(function () {
-    try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) { /* history api */ }
-  }, 1500);
-}
-
-if (sb) {
-  sb.auth.onAuthStateChange(function (event, session) {
-    booted = true;
-    if (event === 'TOKEN_REFRESHED') { state.session = session; return; }
-    if (event === 'PASSWORD_RECOVERY') state.recovery = true;
-    var newId = session && session.user ? session.user.id : null;
-    if (event === 'SIGNED_IN' && newId && newId === state.userId && !state.recovery) { state.session = session; return; }
-    if (event === 'USER_UPDATED' && newId && newId === state.userId) { state.session = session; return; }
-    state.session = session; state.userId = newId;
-    setTimeout(route, 0);
-  });
-
-  setTimeout(function () {
-    if (booted) return;
-    sb.auth.getSession().then(function (r) {
-      if (booted) return;
-      booted = true;
-      state.session = r.data && r.data.session ? r.data.session : null;
-      state.userId = state.session && state.session.user ? state.session.user.id : null;
-      route();
-    }, function () { booted = true; route(); });
-  }, 2500);
-} else {
-  // If no Supabase library found, boot into offline records mode
-  setTimeout(function() {
-    state.offlineMode = true;
-    renderMain();
-  }, 500);
-}
-
-document.addEventListener('visibilitychange', function () {
-  if (document.visibilityState !== 'visible') return;
-  if (!state.profile || !state.loadedAt || sheet || state.loading || state.offlineMode) return;
-  if (Date.now() - state.loadedAt > 5 * 60 * 1000) loadData({ quiet: true });
-});
-
-})();
-</script>
-</body>
-</html>
+  if (p.barcode) badges += '<span class="badge barcode">

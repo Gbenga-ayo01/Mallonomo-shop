@@ -1224,6 +1224,8 @@ var STORE_DB = {
       };
       req.onsuccess = function(e) {
         STORE_DB.db = e.target.result;
+        /* if a newer copy of the app needs to upgrade the database, step aside instead of blocking it */
+        STORE_DB.db.onversionchange = function() { try { STORE_DB.db.close(); } catch (x) {} STORE_DB.db = null; };
         resolve(STORE_DB.db);
       };
       req.onerror = function() { resolve(null); };
@@ -2381,8 +2383,4 @@ function rowHTML(p) {
 
   var stockHTML = p.in_stock
     ? '<span class="stock-pill in"><span class="stock-dot"></span>In Stock</span>'
-    : '<span class="stock-pill out"><span class="stock-dot"></span>Out of Stock</span>';
-
-  var badges = '';
-  if (cat) badges += '<span class="badge category">' + esc(cat) + '</span>';
-  if (p.barcode) badges += '<span class="badge barcode">
+    : '<span class="

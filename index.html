@@ -1164,7 +1164,7 @@ textarea.input { min-height: 84px; resize: vertical; padding: 12px 14px; }
   setTimeout(function () {
     var a = document.getElementById('app');
     if (a && /Loading Price Manager/.test(a.textContent || '') && !a.querySelector('div'))
-      show('still loading after 12s. supabase.js loaded: ' + !!(window.supabase && window.supabase.createClient));
+      show('still loading after 12s. supabase.js loaded: ' + !!(window.supabase && window.supabase.createClient) + ' | boot: ' + JSON.stringify(window.__boot || {}));
   }, 12000);
 })();
 </script>
@@ -1172,6 +1172,7 @@ textarea.input { min-height: 84px; resize: vertical; padding: 12px 14px; }
 <script>
 (function () {
 'use strict';
+var BOOT = window.__boot = {};
 
 /* ------------------------------------------------------------------
    Settings & Configuration
@@ -2092,6 +2093,7 @@ function renderRouteError(msg) {
    App Routing & Session Control
 ------------------------------------------------------------------- */
 function route() {
+  BOOT.route = (BOOT.route || 0) + 1;
   if (state.offlineMode) { renderMain(); return; }
   var token = ++state.routeToken;
   if (state.recovery) { renderRecovery(); return; }
@@ -2372,11 +2374,4 @@ function renderFilterBar() {
     };
   }
 
-  $('#sort-sel').onchange = function () {
-    state.sort = this.value;
-    sortProducts();
-    renderList();
-  };
-}
-
-funct
+ 
